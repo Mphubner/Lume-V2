@@ -1,0 +1,84 @@
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+
+import transactionsRouter from './routes/transactions.js';
+import accountsRouter from './routes/accounts.js';
+import categoriesRouter from './routes/categories.js';
+import recurringRouter from './routes/recurring.js';
+import debtsRouter from './routes/debts.js';
+import goalsRouter from './routes/goals.js';
+import budgetsRouter from './routes/budgets.js';
+import healthRouter from './routes/health.js';
+import importRouter from './routes/import.js';
+import aiRouter from './routes/ai.js';
+import adminRouter from './routes/admin.js';
+import profileRouter from './routes/profile.js';
+import dashboardRouter from './routes/dashboard.js';
+import paymentsRouter from './routes/payments.js';
+import notificationsRouter from './routes/notifications.js';
+import pluggyRouter from './routes/pluggy.js';
+
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 5001;
+
+// Security Middleware
+app.use(helmet());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  credentials: true,
+}));
+
+// Rate Limiting
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per `window` (here, per 15 minutes)
+  message: 'Muitas requisições deste IP, tente novamente em 15 minutos.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(globalLimiter);
+
+// Special raw body parsing for Stripe Webhook BEFORE express.json()
+app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
+
+app.use(express.json({ limit: '10mb' }));
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0' });
+});
+
+// API Routes
+app.use('/api/profile', profileRouter);
+app.use('/api/dashboard', dashboardRouter);
+app.use('/api/transactions', transactionsRouter);
+app.use('/api/accounts', accountsRouter);
+app.use('/api/categories', categoriesRouter);
+app.use('/api/recurring', recurringRouter);
+app.use('/api/debts', debtsRouter);
+app.use('/api/goals', goalsRouter);
+app.use('/api/budgets', budgetsRouter);
+app.use('/api/health', healthRouter);
+app.use('/api/import', importRouter);
+app.use('/api/ai', aiRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api/payments', paymentsRouter);
+app.use('/api/notifications', notificationsRouter);
+app.use('/api/pluggy', pluggyRouter);
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('❌ Error:', err.message);
+  res.status(500).json({ error: 'Erro interno do servidor' });
+});
+
+app.listen(PORT, () => {
+  console.log(`\n☀️  Lume Backend running on port ${PORT}`);
+  console.log(`   Health: http://localhost:${PORT}/health`);
+  console.log(`   Mode: ${process.env.NODE_ENV || 'development'}\n`);
+});
