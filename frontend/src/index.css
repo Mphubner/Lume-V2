@@ -6,14 +6,14 @@
 
 /* ---- CSS Variables ---- */
 :root {
-  /* Backgrounds */
-  --bg-primary: #0f1219;
-  --bg-secondary: #1a1f2e;
-  --bg-card: #1e2538;
-  --bg-card-hover: #252d42;
-  --bg-input: #1a2035;
-  --bg-modal-overlay: rgba(0, 0, 0, 0.6);
-  --bg-sidebar: #141824;
+  /* Backgrounds Premium Zinc/Midnight */
+  --bg-primary: #09090b;
+  --bg-secondary: #18181b;
+  --bg-card: #27272a;
+  --bg-card-hover: #3f3f46;
+  --bg-input: #18181b;
+  --bg-modal-overlay: rgba(0, 0, 0, 0.75);
+  --bg-sidebar: rgba(24, 24, 27, 0.85);
 
   /* Accents */
   --accent-gold: #d4a843;
@@ -106,7 +106,7 @@ button {
 
 input, select, textarea {
   font-family: inherit;
-  font-size: 0.875rem;
+  font-size: 16px; /* Previne Zoom automático no iOS Android */
   color: var(--text-primary);
   background: var(--bg-input);
   border: 1px solid var(--border-color);
@@ -183,6 +183,48 @@ select {
   margin-left: var(--sidebar-collapsed);
 }
 
+/* ---- Mobile Navigation ---- */
+.mobile-navbar {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 64px;
+  background: rgba(9, 9, 11, 0.85); /* Zinc-950 Transparent */
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border-color);
+  z-index: 45;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1.5rem;
+}
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: var(--bg-modal-overlay);
+  backdrop-filter: blur(4px);
+  z-index: 48;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+@media (max-width: 900px) {
+  .mobile-navbar { display: flex; }
+  .sidebar-overlay.active { display: block; opacity: 1; pointer-events: auto; }
+  .sidebar-overlay { pointer-events: none; }
+  /* Off-canvas sidebar */
+  aside.sidebar {
+    transform: translateX(-100%);
+    width: 280px !important; /* Em mobile, força width cheia */
+  }
+  aside.sidebar.mobile-open {
+    transform: translateX(0);
+    box-shadow: 10px 0 30px rgba(0,0,0,0.5);
+    background: rgba(9, 9, 11, 0.98) !important;
+  }
+}
+
 /* ---- Page Header ---- */
 .page-header {
   margin-bottom: 2rem;
@@ -192,6 +234,7 @@ select {
   font-weight: 700;
   color: var(--text-primary);
   margin-bottom: 0.25rem;
+  letter-spacing: -0.02em; /* Premium typography */
 }
 .page-header p {
   font-size: 0.9rem;
@@ -284,7 +327,7 @@ select {
 @media (max-width: 1200px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 900px) {
   .grid-3, .grid-4 { grid-template-columns: repeat(2, 1fr); }
-  .main-content { margin-left: 0; padding: 1rem; }
+  .main-content { margin-left: 0; padding: 1rem; padding-top: 5.5rem; } /* Espaço para Mobile Navbar */
 }
 @media (max-width: 600px) {
   .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
@@ -399,7 +442,8 @@ select {
   position: fixed;
   inset: 0;
   background: var(--bg-modal-overlay);
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   z-index: 100;
   display: flex;
   align-items: center;
@@ -869,6 +913,21 @@ select {
   grid-template-columns: 1fr;
   max-width: 480px;
   min-height: auto;
+}
+
+@media (max-width: 900px) {
+  .auth-container {
+    grid-template-columns: 1fr;
+    max-width: 480px;
+    margin: 1rem;
+    min-height: auto;
+  }
+  .auth-brand-panel {
+    display: none; /* Em mobile removemos o lado esquerdo pesado */
+  }
+  .auth-form-panel {
+    padding: 2.5rem 1.5rem;
+  }
 }
 
 @keyframes authSlideUp {

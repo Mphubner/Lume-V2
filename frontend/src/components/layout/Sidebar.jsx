@@ -42,7 +42,7 @@ const navGroups = [
   },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ mobileOpen, onClose }) {
   const { user, profile, isAdmin, signOut } = useAuth();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
@@ -60,7 +60,7 @@ export default function Sidebar() {
   };
 
   return (
-    <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`} style={{
+    <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`} style={{
       width: collapsed ? 'var(--sidebar-collapsed)' : 'var(--sidebar-width)',
       position: 'fixed',
       top: 0,
@@ -109,7 +109,8 @@ export default function Sidebar() {
           gap: collapsed ? '1.5rem' : '0.5rem' 
         }}>
           <NotificationBell isCollapsed={collapsed} />
-          <button onClick={() => setCollapsed(!collapsed)} style={{
+          {/* Menu button hidden on mobile since Navbar handles it, but keeps collapse for Desktop */}
+          <button className="desktop-collapse-btn" onClick={() => setCollapsed(!collapsed)} style={{
             background: 'var(--bg-secondary)',
             color: 'var(--text-primary)',
             padding: '0.4rem',
