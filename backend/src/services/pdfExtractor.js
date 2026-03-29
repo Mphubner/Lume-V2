@@ -5,16 +5,19 @@
  */
 
 import dotenv from 'dotenv';
-import pdfParseLib from 'pdf-parse/lib/pdf-parse.js';
+import { createRequire } from 'module';
 
 dotenv.config();
+
+const require = createRequire(import.meta.url);
+const pdfParse = require('pdf-parse');
 
 /**
  * Main entry point: receives a PDF buffer, returns an array of transaction objects
  */
 export async function extractTransactionsFromPDF(buffer) {
   // Step 1: Extract raw text from PDF
-  const pdfData = await pdfParseLib(buffer);
+  const pdfData = await pdfParse(buffer);
   const rawText = pdfData.text;
 
   if (!rawText || rawText.trim().length < 50) {
