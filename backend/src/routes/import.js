@@ -10,40 +10,23 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 
 router.use(authMiddleware);
 
-// POST /api/import/upload
-router.post('/upload', upload.single('file'), async (req, res) => {
+// Processamento Assíncrono da Fila
+async function processImportBackground(user, fileBuffer, fileType, importRecordId, accountId) {
   try {
-    if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
-
-    const { account_id, account_type = 'checking' } = req.body;
-    const fileType = req.file.originalname.split('.').pop().toLowerCase();
-
-    if (!['csv', 'ofx', 'xlsx', 'pdf'].includes(fileType)) {
-      return res.status(400).json({ error: 'Formato não suportado. Use PDF, CSV, XLSX ou OFX.' });
-    }
-
-    // Create import record
-    const { data: importRecord } = await supabase.from('imports').insert({
-      user_id: req.user.id,
-      account_id,
-      filename: req.file.originalname,
-      file_type: fileType,
-      status: 'processing',
-    }).select().single();
-
-    // Parse file
     let rawTransactions = [];
+    let discoveredTitular = null;
 
     if (fileType === 'pdf') {
-      // ---- NEW: Full AI-powered PDF extraction pipeline ----
-      rawTransactions = await extractTransactionsFromPDF(req.file.buffer);
+      const result = await extractTransactionsFromPDF(fileBuffer);
+      rawTransactions = result.transactions;
+      discoveredTitular = result.titular;
     } else if (fileType === 'ofx') {
-      rawTransactions = parseOFX(req.file.buffer.toString());
+      rawTransactions = parseOFX(fileBuffer.toString());
     } else if (fileType === 'csv') {
-      rawTransactions = parseCSV(req.file.buffer.toString());
+      rawTransactions = parseCSV(fileBuffer.toString());
     } else if (fileType === 'xlsx') {
       const xlsx = await import('xlsx');
-      const workbook = xlsx.read(req.file.buffer);
+      const workbook = xlsx.read(fileBuffer);
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows = xlsx.utils.sheet_to_json(sheet);
       rawTransactions = rows.map(row => ({
@@ -54,19 +37,13 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     }
 
     if (rawTransactions.length === 0) {
-      await supabase.from('imports').update({ status: 'empty', total_transactions: 0 }).eq('id', importRecord.id);
-      return res.json({
-        success: false,
-        total: 0, imported: 0, duplicates: 0,
-        importId: importRecord.id,
-        message: 'Nenhuma transação foi encontrada no arquivo. Verifique se o formato está correto.'
-      });
+      await supabase.from('imports').update({ status: 'empty', total_transactions: 0 }).eq('id', importRecordId);
+      return;
     }
 
-    // Get user categories and AI rules
     const [categories, rules] = await Promise.all([
-      supabase.from('categories').select('*').or(`user_id.eq.${req.user.id},is_system.eq.true`),
-      supabase.from('ai_rules').select('*, categories(name)').eq('user_id', req.user.id).eq('is_active', true),
+      supabase.from('categories').select('*').or(`user_id.eq.${user.id},is_system.eq.true`),
+      supabase.from('ai_rules').select('*, categories(name)').eq('user_id', user.id).eq('is_active', true),
     ]);
 
     const userRules = (rules.data || []).map(r => ({ keyword: r.keyword, category_name: r.categories?.name }));
@@ -78,7 +55,6 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     for (const raw of rawTransactions) {
       if (!raw.description || raw.amount === undefined || raw.amount === null) continue;
 
-      // Normalize date: try to convert BR format DD/MM/YYYY to ISO
       let normalizedDate = raw.date || new Date().toISOString().split('T')[0];
       if (/^\d{2}\/\d{2}\/\d{4}$/.test(normalizedDate)) {
         const [d, m, y] = normalizedDate.split('/');
@@ -88,74 +64,103 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         normalizedDate = `20${y}-${m}-${d}`;
       }
 
-      // Hash to prevent duplicates
       const hash = Buffer.from(`${normalizedDate}-${raw.description}-${raw.amount}`).toString('base64');
-
-      const { data: existing } = await supabase.from('transactions').select('id').eq('import_hash', hash).eq('user_id', req.user.id).limit(1);
+      const { data: existing } = await supabase.from('transactions').select('id').eq('import_hash', hash).eq('user_id', user.id).limit(1);
       if (existing?.length > 0) { duplicates++; continue; }
 
-      // AI categorization
       let categoryId = null;
       const descLower = raw.description.toLowerCase();
       const matchedRule = userRules.find(r => descLower.includes(r.keyword.toLowerCase()));
+      
       if (matchedRule) {
         const cat = catList.find(c => c.name === matchedRule.category_name);
         categoryId = cat?.id;
-        const rule = (rules.data || []).find(r => r.keyword.toLowerCase() === matchedRule.keyword.toLowerCase());
-        if (rule) {
-          await supabase.from('ai_rules').update({ usage_count: rule.usage_count + 1 }).eq('id', rule.id);
+        if (matchedRule.id) {
+          await supabase.from('ai_rules').update({ usage_count: matchedRule.usage_count + 1 }).eq('id', matchedRule.id);
         }
       } else if (raw.category) {
-        // If AI extraction already suggested a category, try to match
         const cat = catList.find(c => c.name.toLowerCase() === raw.category.toLowerCase());
         categoryId = cat?.id;
       }
-      
+
       if (!categoryId) {
-        // Fallback: Use AI for categorization
         try {
           const aiResult = await categorizeTransaction(raw.description, raw.amount, catList, userRules);
           const cat = catList.find(c => c.name === aiResult.category);
           categoryId = cat?.id;
-        } catch (e) {
-          // Silently continue — category remains null
-        }
+        } catch (e) { }
       }
 
+      // Regra Lógica: Identificar transferências para não impactar Receita/Despesa (exceto salários)
+      const isTransfer = (descLower.includes('transferencia') || descLower.includes('ted ') || descLower.includes('pix env') || descLower.includes('pix rec')) && !descLower.includes('salario');
+
       await supabase.from('transactions').insert({
-        user_id: req.user.id,
-        account_id,
+        user_id: user.id,
+        account_id: accountId,
         category_id: categoryId,
         description: raw.description,
         raw_description: raw.description,
         amount: raw.amount,
-        type: raw.amount >= 0 ? 'income' : 'expense',
+        type: isTransfer ? 'transfer' : (raw.amount >= 0 ? 'income' : 'expense'),
+        is_internal_transfer: isTransfer,
         date: normalizedDate,
         origin: 'import',
         import_hash: hash,
         is_confirmed: true,
+        import_id: importRecordId // Vínculo para auditoria
       });
       imported++;
     }
 
-    // Update import record
     await supabase.from('imports').update({
       total_transactions: rawTransactions.length,
       imported_transactions: imported,
       duplicates_skipped: duplicates,
       status: 'completed',
-    }).eq('id', importRecord.id);
+    }).eq('id', importRecordId);
 
-    res.json({
+  } catch (err) {
+    console.error('Background import processing error:', err);
+    await supabase.from('imports').update({ status: 'failed' }).eq('id', importRecordId);
+  }
+}
+
+// POST /api/import/upload
+router.post('/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+
+    const { account_id } = req.body;
+    const fileType = req.file.originalname.split('.').pop().toLowerCase();
+
+    if (!['csv', 'ofx', 'xlsx', 'pdf'].includes(fileType)) {
+      return res.status(400).json({ error: 'Formato não suportado. Use PDF, CSV, XLSX ou OFX.' });
+    }
+
+    // Criar o registro da importação "processing" (A fila)
+    const { data: importRecord, error } = await supabase.from('imports').insert({
+      user_id: req.user.id,
+      account_id,
+      filename: req.file.originalname,
+      file_type: fileType,
+      status: 'processing',
+    }).select().single();
+
+    if (error) throw error;
+
+    // Fire and Forget (Lança o processo pesado em background no event loop e NÃO aguarda)
+    processImportBackground(req.user, req.file.buffer, fileType, importRecord.id, account_id);
+
+    // Responde instantaneamente
+    res.status(202).json({
       success: true,
-      total: rawTransactions.length,
-      imported,
-      duplicates,
+      status: 'processing',
       importId: importRecord.id,
+      message: 'Arquivo na fila de processamento. Pode sair da página!'
     });
   } catch (err) {
-    console.error('Import error:', err);
-    res.status(500).json({ error: 'Erro ao importar arquivo: ' + err.message });
+    console.error('Import initialization error:', err);
+    res.status(500).json({ error: 'Erro ao iniciar importação: ' + err.message });
   }
 });
 

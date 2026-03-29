@@ -10,7 +10,7 @@ router.use(authMiddleware);
 // GET /api/transactions?month=&year=&type=&category=&account=&member=&search=&page=&limit=
 router.get('/', async (req, res) => {
   try {
-    const { month, year, type, category_id, account_id, member_id, search, page = 1, limit = 100, sort = 'date', order = 'desc' } = req.query;
+    const { month, year, type, category_id, account_id, member_id, search, import_id, page = 1, limit = 100, sort = 'date', order = 'desc' } = req.query;
     
     let query = supabase
       .from('transactions')
@@ -27,6 +27,7 @@ router.get('/', async (req, res) => {
     if (category_id) query = query.eq('category_id', category_id);
     if (account_id) query = query.eq('account_id', account_id);
     if (member_id) query = query.eq('member_id', member_id);
+    if (import_id) query = query.eq('import_id', import_id); // Filtro do modal de conferência
     if (search) query = query.ilike('description', `%${search}%`);
 
     const from = (page - 1) * limit;
@@ -35,7 +36,7 @@ router.get('/', async (req, res) => {
     const { data, error, count } = await query;
     if (error) throw error;
 
-    res.json({ transactions: data, total: count, page: parseInt(page), totalPages: Math.ceil(count / limit) });
+    res.json(import_id ? data : { transactions: data, total: count, page: parseInt(page), totalPages: Math.ceil(count / limit) });
   } catch (err) {
     console.error('GET /transactions error:', err);
     res.status(500).json({ error: 'Erro ao buscar transações' });
@@ -46,7 +47,7 @@ router.get('/', async (req, res) => {
 router.get('/summary', async (req, res) => {
   try {
     const { month, year } = req.query;
-    let query = supabase.from('transactions').select('amount, type, date, category_id, categories(name, icon, color)').eq('user_id', req.user.id);
+    let query = supabase.from('transactions').select('amount, type, date, is_internal_transfer, category_id, categories(name, icon, color)').eq('user_id', req.user.id);
 
     if (month && year) {
       const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
@@ -57,13 +58,14 @@ router.get('/summary', async (req, res) => {
     const { data, error } = await query;
     if (error) throw error;
 
-    const income = data.filter(t => t.type === 'income').reduce((s, t) => s + parseFloat(t.amount), 0);
-    const expenses = data.filter(t => t.type === 'expense').reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
-    const transfers = data.filter(t => t.type === 'transfer').reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
+    const validData = data.filter(t => !t.is_internal_transfer && t.type !== 'transfer');
+    const income = validData.filter(t => t.type === 'income').reduce((s, t) => s + parseFloat(t.amount), 0);
+    const expenses = validData.filter(t => t.type === 'expense').reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
+    const transfers = data.filter(t => t.type === 'transfer' || t.is_internal_transfer).reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
 
     // Group by category
     const byCategory = {};
-    data.filter(t => t.type === 'expense').forEach(t => {
+    validData.filter(t => t.type === 'expense').forEach(t => {
       const catName = t.categories?.name || 'Outros';
       if (!byCategory[catName]) {
         byCategory[catName] = { name: catName, icon: t.categories?.icon || '📦', color: t.categories?.color || '#94a3b8', total: 0, count: 0 };

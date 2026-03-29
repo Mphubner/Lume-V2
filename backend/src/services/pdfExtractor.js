@@ -33,16 +33,21 @@ export async function extractTransactionsFromPDF(buffer) {
 
   // Step 4: Send each chunk to AI for structured extraction
   let allTransactions = [];
+  let titularDetectado = null;
+
   for (const chunk of chunks) {
-    const transactions = await extractWithAI(chunk);
-    allTransactions.push(...transactions);
+    const aiData = await extractWithAI(chunk);
+    if (aiData.titular && !titularDetectado) {
+      titularDetectado = aiData.titular;
+    }
+    allTransactions.push(...aiData.transactions);
   }
 
   // Step 5: Post-process and validate
   allTransactions = postProcessTransactions(allTransactions);
 
-  console.log(`📄 PDF extraction complete: ${allTransactions.length} transactions extracted from ${chunks.length} chunk(s)`);
-  return allTransactions;
+  console.log(`📄 PDF extraction complete: ${allTransactions.length} transactions. Titular: ${titularDetectado || 'Desconhecido'}`);
+  return { titular: titularDetectado, transactions: allTransactions };
 }
 
 /**
@@ -134,41 +139,22 @@ async function extractWithAI(textChunk) {
 
   const systemPrompt = `Você é um extrator de dados financeiros especializado em extratos bancários brasileiros (Bradesco, Itaú, Nubank, Inter, PagBank, PicPay, C6, Sicredi, Caixa, Banco do Brasil, BTG, Safra, etc.).
 
-Sua ÚNICA tarefa é converter o texto bruto de um extrato bancário em um array JSON de transações.
+Sua tarefa é extrair os dados básicos do Titular e converter o texto bruto de um extrato bancário em um array JSON de transações.
 
 ### Regras Estritas:
 1. Normalize TODAS as datas para o formato DD/MM/AAAA. Se o ano não aparecer, use o ano mencionado no cabeçalho do extrato ou 2025.
 2. Converta valores para float: NEGATIVO para saídas/débitos/pagamentos, POSITIVO para entradas/créditos/recebimentos.
 3. Trate "D" ou "(-)" como débito (negativo). Trate "C" ou "(+)" como crédito (positivo).
-4. A descrição deve ser limpa e legível (remova códigos internos quando possível, mas mantenha o nome do estabelecimento/pessoa).
-5. Identifique a categoria com base na descrição. Categorias válidas: Alimentação, Transporte, Moradia, Saúde, Educação, Lazer, Compras, Salário, Serviços, Transferência, Investimento, Impostos, Outros.
-6. Se um campo estiver ilegível ou ausente, use null.
-7. Ignore linhas de saldo, totais, cabeçalhos e rodapés. Extraia APENAS lançamentos/movimentações individuais.
-8. Ignore taxas de IOF e tarifas bancárias a menos que sejam lançamentos individuais com valor.
+4. Ignore linhas de saldo final e inicial. Extraia APENAS lançamentos móveis individuais.
+5. Identifique o TITULAR do extrato (Nome da Empresa, Razão Social, ou Nome do Titular Pessoal) baseando-se no cabeçalho inicial do PDF. Se não achar, envie null.
 
 ### Formato de Saída (JSON estrito):
 {
+  "titular": "NOME DO TITULAR OU EMPRESA AQUI",
   "transacoes": [
     {"data": "DD/MM/AAAA", "descricao": "string", "valor": -50.00, "categoria": "Alimentação"}
   ]
-}
-
-### Exemplos de Extração:
-
-Entrada: "05/03 PIX ENVIADO - JOAO SILVA 150,00 D"
-Saída: {"data": "05/03/2025", "descricao": "PIX Enviado - João Silva", "valor": -150.00, "categoria": "Transferência"}
-
-Entrada: "10/03 TED RECEBIDO 3.500,00 C"  
-Saída: {"data": "10/03/2025", "descricao": "TED Recebido", "valor": 3500.00, "categoria": "Salário"}
-
-Entrada: "12/03 COMPRA CARTAO - IFOOD 45,90"
-Saída: {"data": "12/03/2025", "descricao": "iFood", "valor": -45.90, "categoria": "Alimentação"}
-
-Entrada: "15/03 PAG BOLETO CEMIG 287,45"
-Saída: {"data": "15/03/2025", "descricao": "Pagamento CEMIG", "valor": -287.45, "categoria": "Moradia"}
-
-Entrada: "20/03 REND POUPANCA 12,34"
-Saída: {"data": "20/03/2025", "descricao": "Rendimento Poupança", "valor": 12.34, "categoria": "Investimento"}`;
+}`;
 
   const userMessage = `Extraia TODAS as transações do texto de extrato bancário abaixo. Responda SOMENTE com o JSON, sem explicações.
 
@@ -218,10 +204,11 @@ ${textChunk}
 
       const parsed = JSON.parse(content);
       const transacoes = parsed.transacoes || parsed.transactions || [];
+      const titular = parsed.titular || null;
 
       console.log(`🤖 AI extracted ${transacoes.length} transactions (tokens: ${data.usage?.total_tokens || '?'})`);
 
-      return transacoes.map(t => {
+      const formattedTransacoes = transacoes.map(t => {
         let amountParsed = 0;
         const val = t.valor !== undefined ? t.valor : t.amount;
         
@@ -241,6 +228,8 @@ ${textChunk}
         };
       });
 
+      return { titular, transactions: formattedTransacoes };
+
     } catch (err) {
       if (retries > 0) {
         console.warn(`⏳ AI Request falhou: ${err.message}. Retentando...`);
@@ -248,7 +237,7 @@ ${textChunk}
         return makeRequest(retries - 1, delay * 1.5);
       }
       console.error('PDF AI extraction completely failed:', err.message);
-      return [];
+      return { titular: null, transactions: [] };
     }
   };
 

@@ -60,10 +60,10 @@ router.get('/', async (req, res) => {
     const trueBalance = accountsData.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
 
     const txData = txResult.data || [];
-    const nonTransfer = txData.filter(t => !t.is_internal_transfer);
+    const nonTransfer = txData.filter(t => !t.is_internal_transfer && t.type !== 'transfer');
     const income = nonTransfer.filter(t => t.type === 'income').reduce((s, t) => s + parseFloat(t.amount), 0);
     const expenses = nonTransfer.filter(t => t.type === 'expense').reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
-    const transfers = txData.filter(t => t.is_internal_transfer).reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
+    const transfers = txData.filter(t => t.is_internal_transfer || t.type === 'transfer').reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
 
     // By category
     const byCategory = {};
@@ -76,6 +76,7 @@ router.get('/', async (req, res) => {
     // Monthly evolution (last 12 months)
     const monthlyData = {};
     txData.forEach(t => {
+      if (t.is_internal_transfer || t.type === 'transfer') return; // Pula transferências internas/PIX próprios
       const month = t.date.substring(0, 7); // YYYY-MM
       if (!monthlyData[month]) monthlyData[month] = { income: 0, expenses: 0 };
       if (t.type === 'income') monthlyData[month].income += parseFloat(t.amount);
