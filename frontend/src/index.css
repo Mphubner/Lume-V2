@@ -209,21 +209,26 @@ select {
   transition: opacity 0.3s ease;
 }
 
+.sidebar {
+  transition: width var(--transition-normal), transform var(--transition-normal) !important;
+}
+
 @media (max-width: 900px) {
   .mobile-navbar { display: flex; }
   .sidebar-overlay.active { display: block; opacity: 1; pointer-events: auto; }
   .sidebar-overlay { pointer-events: none; }
-  /* Off-canvas sidebar com transicao suave */
+  
+  /* Off-canvas sidebar com transicao suave (Mobile Drawer) */
   aside.sidebar {
     transform: translateX(-100%);
-    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
     width: 280px !important;
   }
   aside.sidebar.mobile-open {
-    transform: translateX(0);
+    transform: translateX(0) !important;
     box-shadow: 10px 0 30px rgba(0,0,0,0.5);
     background: rgba(9, 9, 11, 0.98) !important;
   }
+  
   /* Oculta botao de colapso desktop */
   .desktop-collapse-btn { display: none !important; }
 }

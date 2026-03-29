@@ -70,8 +70,7 @@ export default function Sidebar({ mobileOpen, onClose }) {
       borderRight: '1px solid var(--border-color)',
       display: 'flex',
       flexDirection: 'column',
-      transition: 'width var(--transition-normal)',
-      zIndex: 40,
+      zIndex: 50,
       overflow: 'hidden',
     }}>
       {/* Logo */}
