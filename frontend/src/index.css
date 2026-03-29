@@ -218,14 +218,21 @@ select {
   .sidebar-overlay.active { display: block; opacity: 1; pointer-events: auto; }
   .sidebar-overlay { pointer-events: none; }
   
-  /* Off-canvas sidebar com transicao suave (Mobile Drawer) */
+  .main-content {
+    margin-left: 0 !important;
+    padding: calc(1.5rem + 64px) 1rem 1.5rem 1rem !important; /* Espaço pro mobile navbar não cobrir */
+  }
+
+  /* Off-canvas sidebar (Abre pela direita agora) */
   aside.sidebar {
-    transform: translateX(-100%);
+    transform: translateX(100%);
+    left: auto !important;
+    right: 0 !important;
     width: 280px !important;
   }
   aside.sidebar.mobile-open {
     transform: translateX(0) !important;
-    box-shadow: 10px 0 30px rgba(0,0,0,0.5);
+    box-shadow: -10px 0 30px rgba(0,0,0,0.5);
     background: rgba(9, 9, 11, 0.98) !important;
   }
   
