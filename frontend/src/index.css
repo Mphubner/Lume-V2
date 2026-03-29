@@ -213,16 +213,19 @@ select {
   .mobile-navbar { display: flex; }
   .sidebar-overlay.active { display: block; opacity: 1; pointer-events: auto; }
   .sidebar-overlay { pointer-events: none; }
-  /* Off-canvas sidebar */
+  /* Off-canvas sidebar com transicao suave */
   aside.sidebar {
     transform: translateX(-100%);
-    width: 280px !important; /* Em mobile, força width cheia */
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    width: 280px !important;
   }
   aside.sidebar.mobile-open {
     transform: translateX(0);
     box-shadow: 10px 0 30px rgba(0,0,0,0.5);
     background: rgba(9, 9, 11, 0.98) !important;
   }
+  /* Oculta botao de colapso desktop */
+  .desktop-collapse-btn { display: none !important; }
 }
 
 /* ---- Page Header ---- */
@@ -327,10 +330,42 @@ select {
 @media (max-width: 1200px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 900px) {
   .grid-3, .grid-4 { grid-template-columns: repeat(2, 1fr); }
-  .main-content { margin-left: 0; padding: 1rem; padding-top: 5.5rem; } /* Espaço para Mobile Navbar */
+  .main-content { margin-left: 0 !important; padding: 1rem; padding-top: 5rem; }
+  .page-header h1 { font-size: 1.35rem; }
+  .page-header p { font-size: 0.8rem; }
+  /* Dashboard header compacto */
+  .page-header-actions { display: none; }
+  .filter-bar { flex-wrap: wrap; gap: 0.5rem; }
+  .filter-bar select { width: 100% !important; }
 }
 @media (max-width: 600px) {
   .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+  .grid { gap: 0.75rem; }
+  .main-content { padding: 0.75rem; padding-top: 4.5rem; }
+  .card { padding: 1rem; }
+  .card-header { padding: 0.75rem 1rem; }
+  /* Stat cards em grid 2x2 compacto */
+  .grid-4 { grid-template-columns: repeat(2, 1fr) !important; gap: 0.625rem !important; }
+  .stat-card {
+    padding: 0.875rem 1rem;
+    border-radius: 12px;
+    min-width: 0;
+  }
+  .stat-card-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+  }
+  .stat-card-value {
+    font-size: 1.2rem;
+  }
+  .stat-card-label {
+    font-size: 0.7rem;
+  }
+  .stat-card-sub {
+    font-size: 0.65rem;
+  }
 }
 
 /* ---- Buttons ---- */

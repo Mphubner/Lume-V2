@@ -2,32 +2,19 @@
  * PDF Statement Extractor for Lume
  * ----------------------------------
  * Pipeline: PDF Buffer → pdf-parse (text) → Clean/Normalize → Groq AI (JSON Mode) → Validated Transactions
- * 
- * Supports Brazilian bank statements from: Bradesco, Itaú, Nubank, Inter, PagBank, PicPay, C6, Caixa, BB, etc.
- * Uses Few-Shot prompting + strict JSON schema for reliable extraction across bank layouts.
  */
 
 import dotenv from 'dotenv';
-dotenv.config();
+import pdfParseLib from 'pdf-parse/lib/pdf-parse.js';
 
-// Dynamic import for pdf-parse (CommonJS module)
-let pdfParse;
-async function getPdfParse() {
-  if (!pdfParse) {
-    const mod = await import('pdf-parse');
-    pdfParse = mod.default || mod;
-  }
-  return pdfParse;
-}
+dotenv.config();
 
 /**
  * Main entry point: receives a PDF buffer, returns an array of transaction objects
- * { date: string, description: string, amount: number, category?: string }
  */
 export async function extractTransactionsFromPDF(buffer) {
   // Step 1: Extract raw text from PDF
-  const parse = await getPdfParse();
-  const pdfData = await parse(buffer);
+  const pdfData = await pdfParseLib(buffer);
   const rawText = pdfData.text;
 
   if (!rawText || rawText.trim().length < 50) {
@@ -39,7 +26,7 @@ export async function extractTransactionsFromPDF(buffer) {
   const cleanedText = preprocessBankText(rawText);
 
   // Step 3: Split into chunks if too large (Groq has token limits)
-  const chunks = splitIntoChunks(cleanedText, 6000); // ~6000 chars per chunk ≈ ~1500 tokens
+  const chunks = splitIntoChunks(cleanedText, 6000);
 
   // Step 4: Send each chunk to AI for structured extraction
   let allTransactions = [];
@@ -61,11 +48,9 @@ export async function extractTransactionsFromPDF(buffer) {
 function preprocessBankText(text) {
   let cleaned = text;
 
-  // Remove excessive whitespace/blank lines
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
   cleaned = cleaned.replace(/[ \t]{2,}/g, ' ');
 
-  // Remove common bank footer/header noise
   const noisePatterns = [
     /SAC\s*\d{3,}/gi,
     /ouvidoria[^\n]*/gi,
@@ -73,7 +58,7 @@ function preprocessBankText(text) {
     /www\.\w+\.com\.br/gi,
     /pág(ina)?\s*\d+\s*(de\s*\d+)?/gi,
     /página\s*\d+/gi,
-    /^\s*\d+\s*\/\s*\d+\s*$/gm, // Standalone page numbers like "1 / 3"
+    /^\s*\d+\s*\/\s*\d+\s*$/gm,
     /atendimento\s*24\s*horas?/gi,
     /este\s+documento\s+[^\n]*/gi,
     /informações\s+sobre\s+[^\n]*/gi,
@@ -87,10 +72,8 @@ function preprocessBankText(text) {
     cleaned = cleaned.replace(pattern, '');
   }
 
-  // Trim each line
   cleaned = cleaned.split('\n').map(line => line.trim()).filter(line => line.length > 0).join('\n');
 
-  // Limit total size (keep first ~18000 chars if huge)
   if (cleaned.length > 18000) {
     cleaned = cleaned.substring(0, 18000) + '\n[... texto truncado ...]';
   }
@@ -99,7 +82,7 @@ function preprocessBankText(text) {
 }
 
 /**
- * Split text into manageable chunks for the AI, trying to split on double newlines
+ * Split text into manageable chunks for the AI
  */
 function splitIntoChunks(text, maxChars) {
   if (text.length <= maxChars) return [text];
@@ -113,14 +96,11 @@ function splitIntoChunks(text, maxChars) {
       break;
     }
 
-    // Try to find a good split point (double newline near the limit)
     let splitAt = remaining.lastIndexOf('\n\n', maxChars);
     if (splitAt < maxChars * 0.5) {
-      // Fallback: split at single newline
       splitAt = remaining.lastIndexOf('\n', maxChars);
     }
     if (splitAt < maxChars * 0.3) {
-      // Last resort: hard split
       splitAt = maxChars;
     }
 
@@ -147,12 +127,7 @@ async function extractWithAI(textChunk) {
     together: 'https://api.together.xyz/v1',
   };
   const baseUrl = baseUrls[provider] || baseUrls.groq;
-
-  const models = {
-    groq: process.env.AI_MODEL || 'llama-3.3-70b-versatile',
-    together: process.env.AI_MODEL || 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
-  };
-  const model = models[provider] || models.groq;
+  const model = process.env.AI_MODEL || 'llama-3.3-70b-versatile';
 
   const systemPrompt = `Você é um extrator de dados financeiros especializado em extratos bancários brasileiros (Bradesco, Itaú, Nubank, Inter, PagBank, PicPay, C6, Sicredi, Caixa, Banco do Brasil, BTG, Safra, etc.).
 
@@ -211,8 +186,8 @@ ${textChunk}
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userMessage },
         ],
-        temperature: 0.05, // Very low temp for deterministic extraction
-        max_tokens: 8192,  // Large output for many transactions
+        temperature: 0.05,
+        max_tokens: 8192,
         response_format: { type: 'json_object' },
       }),
     });
@@ -250,7 +225,7 @@ ${textChunk}
 }
 
 /**
- * Post-process: deduplicate, validate, and normalize extracted transactions
+ * Post-process: deduplicate, validate, and normalize
  */
 function postProcessTransactions(transactions) {
   const seen = new Set();
@@ -260,7 +235,6 @@ function postProcessTransactions(transactions) {
     if (!t.description || t.description.length < 2) continue;
     if (t.amount === 0 || t.amount === null || t.amount === undefined || isNaN(t.amount)) continue;
 
-    // Skip summary/balance lines that AI might have included
     const descLower = t.description.toLowerCase();
     if (descLower.includes('saldo anterior') || descLower.includes('saldo final') ||
         descLower.includes('saldo do dia') || descLower.includes('total de') ||
@@ -268,7 +242,6 @@ function postProcessTransactions(transactions) {
       continue;
     }
 
-    // Dedup key
     const key = `${t.date}-${t.description}-${t.amount}`;
     if (seen.has(key)) continue;
     seen.add(key);
