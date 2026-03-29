@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, adminMiddleware } from '../middleware/auth.js';
 import { supabase } from '../config/supabase.js';
+import { stripe, createProductAndPrice } from '../services/stripeService.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -153,7 +154,21 @@ router.get('/plans', async (req, res) => {
 router.post('/plans', async (req, res) => {
   try {
     const { name, price, max_accounts, max_transactions, features, is_active } = req.body;
+    let newPlanId = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    // Se houver config de stripe, criar nativamente na infra para obter o Price ID
+    if (stripe) {
+      try {
+        const { priceId } = await createProductAndPrice(name, parseFloat(price), 'month');
+        newPlanId = priceId; // price_1xxxxx
+      } catch (stripeErr) {
+        console.error('Stripe creation warning:', stripeErr);
+        // Continue fallback se for apenas erro de credencial
+      }
+    }
+
     const { data, error } = await supabase.from('plans').insert({
+      id: newPlanId,
       name, price: parseFloat(price), max_accounts: parseInt(max_accounts),
       max_transactions: parseInt(max_transactions),
       features: features || [], is_active: is_active !== false,

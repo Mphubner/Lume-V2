@@ -145,6 +145,10 @@ class ApiService {
   }
   getImportHistory() { return this.request('/import/history'); }
 
+  // Family / Workspaces
+  getFamily() { return this.request('/family'); }
+  createFamilyMember(data) { return this.request('/family/members', { method: 'POST', body: data }); }
+
   // Admin
   getKPIs() { return this.request('/admin/kpis'); }
   getUsers(search) { return this.request(`/admin/users${search ? `?search=${search}` : ''}`); }

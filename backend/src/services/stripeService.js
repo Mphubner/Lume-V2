@@ -22,6 +22,26 @@ export const createCustomer = async (email, name, metadata = {}) => {
   });
 };
 
+export const createProductAndPrice = async (name, amount, interval = 'month') => {
+  if (!stripe) throw new Error('Stripe not configured');
+  
+  // Create product
+  const product = await stripe.products.create({
+    name,
+    description: `Plano ${name} da Lume`,
+  });
+
+  // Create price
+  const price = await stripe.prices.create({
+    product: product.id,
+    unit_amount: Math.round(amount * 100), // Stripe expects cents
+    currency: 'brl',
+    recurring: { interval },
+  });
+
+  return { productId: product.id, priceId: price.id };
+};
+
 export const createSubscription = async (customerId, priceId, paymentMethodId) => {
   if (!stripe) throw new Error('Stripe not configured');
 

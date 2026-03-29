@@ -20,7 +20,7 @@ import dashboardRouter from './routes/dashboard.js';
 import paymentsRouter from './routes/payments.js';
 import notificationsRouter from './routes/notifications.js';
 import pluggyRouter from './routes/pluggy.js';
-
+import familyRouter from './routes/family.js';
 dotenv.config();
 
 const app = express();
@@ -80,6 +80,7 @@ app.use('/api/admin', adminRouter);
 app.use('/api/payments', paymentsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/pluggy', pluggyRouter);
+app.use('/api/family', familyRouter);
 
 // Error handler
 app.use((err, req, res, next) => {

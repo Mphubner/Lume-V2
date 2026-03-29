@@ -18,9 +18,12 @@ export default function SettingsPage() {
   const [showCatModal, setShowCatModal] = useState(false);
   const [accounts, setAccounts] = useState([]);
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [accountForm, setAccountForm] = useState({ name: '', type: 'checking', institution: '', balance: '0', credit_limit: '', closing_day: '', due_day: '', color: '#d4a843', icon: '🏦' });
+  const [accountForm, setAccountForm] = useState({ name: '', type: 'checking', account_type: 'personal', institution: '', balance: '0', credit_limit: '', closing_day: '', due_day: '', color: '#d4a843', icon: '🏦' });
   const [saving, setSaving] = useState(false);
   const [syncingCalendar, setSyncingCalendar] = useState(false);
+  const [familyData, setFamilyData] = useState({ hasFamily: false, members: [] });
+  const [showFamilyModal, setShowFamilyModal] = useState(false);
+  const [familyForm, setFamilyForm] = useState({ name: '', email: '', password: '', role: 'member' });
 
   useEffect(() => {
     if (profile) {
@@ -35,6 +38,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (activeTab === 'ai') loadAIRules();
     if (activeTab === 'preferences') { loadCategories(); loadAccounts(); }
+    if (activeTab === 'family') loadFamily();
   }, [activeTab]);
 
   const loadAIRules = async () => {
@@ -60,6 +64,29 @@ export default function SettingsPage() {
         { id: '2', name: 'Itaú CC', type: 'checking', institution: 'Itaú', balance: 1500, color: '#f97316', icon: '🟠' },
         { id: '3', name: 'Nubank Cartão', type: 'credit_card', institution: 'Nubank', credit_limit: 8000, closing_day: 3, due_day: 10, color: '#8b5cf6', icon: '💳' },
       ]);
+    }
+  };
+
+  const loadFamily = async () => {
+    try {
+      const result = await api.getFamily();
+      setFamilyData(result);
+    } catch (err) { console.error(err); }
+  };
+
+  const createFamilyMember = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.createFamilyMember(familyForm);
+      setShowFamilyModal(false);
+      setFamilyForm({ name: '', email: '', password: '', role: 'member' });
+      alert('Membro adicionado com sucesso!');
+      loadFamily();
+    } catch (err) {
+      alert(err.message || 'Erro ao criar usuário.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -182,6 +209,7 @@ export default function SettingsPage() {
                     <div className="form-row"><div className="form-group"><label>Nome *</label><input value={accountForm.name} onChange={e => setAccountForm({ ...accountForm, name: e.target.value })} placeholder="Nubank, Itaú..." required /></div><div className="form-group"><label>Instituição</label><input value={accountForm.institution} onChange={e => setAccountForm({ ...accountForm, institution: e.target.value })} placeholder="Nubank" /></div></div>
                     <div className="form-row">
                       <div className="form-group"><label>Tipo</label><select value={accountForm.type} onChange={e => setAccountForm({ ...accountForm, type: e.target.value })}><option value="checking">Conta Corrente</option><option value="savings">Poupança</option><option value="credit_card">Cartão de Crédito</option><option value="investment">Investimento</option><option value="wallet">Carteira</option></select></div>
+                      <div className="form-group"><label>Titularidade</label><select value={accountForm.account_type} onChange={e => setAccountForm({ ...accountForm, account_type: e.target.value })}><option value="personal">Pessoal (Usuário)</option><option value="business">Empresarial (PJ/Empresa)</option></select></div>
                       <div className="form-group"><label>{accountForm.type === 'credit_card' ? 'Limite' : 'Saldo Atual'} (R$)</label><input type="number" step="0.01" value={accountForm.type === 'credit_card' ? accountForm.credit_limit : accountForm.balance} onChange={e => setAccountForm({ ...accountForm, [accountForm.type === 'credit_card' ? 'credit_limit' : 'balance']: e.target.value })} /></div>
                     </div>
                     {accountForm.type === 'credit_card' && (
@@ -221,13 +249,20 @@ export default function SettingsPage() {
           </div>
           <div className="grid grid-2" style={{ gap: '1rem' }}>
             {[
-              { name: 'Gratuito', price: 'R$ 0', features: ['1 conta', 'Até 50 transações/mês', 'Categorias básicas'] },
-              { name: 'Individual', price: 'R$ 19,90/mês', features: ['Contas ilimitadas', 'Transações ilimitadas', 'IA completa', 'Importação de extratos'] },
+              { id: 'free', name: 'Gratuito', price: 'R$ 0', features: ['1 conta', 'Até 50 transações/mês', 'Categorias básicas'] },
+              { id: 'individual', name: 'Individual', price: 'R$ 19,90/mês', features: ['Contas ilimitadas', 'Transações ilimitadas', 'IA completa', 'Importação de extratos'] },
+              { id: 'family', name: 'Família', price: 'R$ 39,90/mês', features: ['Tudo do Individual', 'Até 5 membros da família', 'Múltiplos Workspaces'] },
             ].map(plan => (
               <div key={plan.name} style={{ padding: '1.5rem', background: 'var(--bg-secondary)', borderRadius: 'var(--border-radius-md)', border: '1px solid var(--border-color)', textAlign: 'center' }}>
                 <div style={{ fontWeight: 700, fontSize: '1.125rem', marginBottom: '0.25rem' }}>{plan.name}</div>
                 <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--accent-gold)', marginBottom: '1rem' }}>{plan.price}</div>
                 {plan.features.map((f, i) => <div key={i} style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>✅ {f}</div>)}
+                {profile?.plan !== plan.id && plan.id !== 'free' && (
+                  <button className="btn btn-primary" style={{ marginTop: '1rem', width: '100%' }} onClick={() => window.location.href = `/checkout?plan=${plan.id}`}>Assinar {plan.name}</button>
+                )}
+                {profile?.plan === plan.id && (
+                  <button className="btn btn-secondary" style={{ marginTop: '1rem', width: '100%' }} disabled>Plano Atual</button>
+                )}
               </div>
             ))}
           </div>
@@ -237,16 +272,54 @@ export default function SettingsPage() {
       {/* FAMILY TAB */}
       {activeTab === 'family' && (
         <div className="card" style={{ maxWidth: 650 }}>
-          <div className="card-header"><h3 className="card-title"><Users size={18} /> Membros da Família</h3><button className="btn btn-primary btn-sm"><Plus size={14} /> Convidar</button></div>
-          <div style={{ padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--border-radius-sm)', display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+          <div className="card-header"><h3 className="card-title"><Users size={18} /> Equipe e Família</h3><button className="btn btn-primary btn-sm" onClick={() => setShowFamilyModal(true)}><Plus size={14} /> Novo Membro</button></div>
+          
+          <div style={{ padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--border-radius-sm)', display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
             <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--accent-gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: 'var(--text-dark)' }}>{(profile?.full_name || 'U')[0]}</div>
-            <div><div style={{ fontWeight: 600 }}>{profile?.full_name || 'Você'}</div><div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{user?.email} • Dono</div></div>
+            <div><div style={{ fontWeight: 600 }}>{profile?.full_name || 'Você'}</div><div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{user?.email} • Admin / Dono</div></div>
             <span className="badge badge-success" style={{ marginLeft: 'auto' }}>👑 Owner</span>
           </div>
-          <div style={{ textAlign: 'center', padding: '2rem' }}>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Convide membros da família para gerenciar finanças juntos.<br/>Cada membro pode ter suas próprias transações e categorias.</p>
-            <button className="btn btn-primary" style={{ marginTop: '1rem' }} onClick={() => alert('Módulo Familiar (envio de convites) está em fase beta e será liberado nos próximos dias.')}><Plus size={16} /> Convidar Membro</button>
-          </div>
+
+          <h4 style={{ marginBottom: '1rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>Membros Vinculados</h4>
+          {familyData.members.filter(m => m.id !== user?.id).length === 0 ? (
+             <div style={{ textAlign: 'center', padding: '2rem' }}>
+               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Nenhum membro vinculado ainda.<br/>Convide sócios ou familiares para compartilhar a gestão.</p>
+               <button className="btn btn-primary" style={{ marginTop: '1rem' }} onClick={() => setShowFamilyModal(true)}><Plus size={16} /> Adicionar Usuário</button>
+             </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {familyData.members.filter(m => m.id !== user?.id).map((member, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-sm)' }}>
+                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--bg-modifier-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>{(member.name || 'U')[0]}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{member.name}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{member.email}</div>
+                  </div>
+                  <span className={`badge ${member.role === 'owner' ? 'badge-success' : 'badge-info'}`}>{member.role}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {showFamilyModal && (
+            <div className="modal-overlay" onClick={() => setShowFamilyModal(false)}>
+              <div className="modal" onClick={e => e.stopPropagation()}>
+                <div className="modal-header"><h2>👥 Novo Usuário</h2><button onClick={() => setShowFamilyModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button></div>
+                <form onSubmit={createFamilyMember}>
+                  <div className="modal-body">
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>Crie as credenciais de acesso para a pessoa que poderá acessar e lançar movimentações nesta conta.</p>
+                    <div className="form-group"><label>Nome Completo *</label><input value={familyForm.name} onChange={e => setFamilyForm({ ...familyForm, name: e.target.value })} required /></div>
+                    <div className="form-group"><label>E-mail de Login *</label><input type="email" value={familyForm.email} onChange={e => setFamilyForm({ ...familyForm, email: e.target.value })} required /></div>
+                    <div className="form-row">
+                      <div className="form-group"><label>Senha Provisória *</label><input type="text" value={familyForm.password} onChange={e => setFamilyForm({ ...familyForm, password: e.target.value })} placeholder="Crie uma senha forte" required minLength={6} /></div>
+                      <div className="form-group"><label>Permissão</label><select value={familyForm.role} onChange={e => setFamilyForm({ ...familyForm, role: e.target.value })}><option value="member">Membro (Colaborador)</option><option value="owner">Co-Administrador</option></select></div>
+                    </div>
+                  </div>
+                  <div className="modal-footer"><button type="button" className="btn btn-secondary" onClick={() => setShowFamilyModal(false)}>Cancelar</button><button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Criando...' : 'Criar Acesso'}</button></div>
+                </form>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
