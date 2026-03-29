@@ -1,18 +1,21 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../../context/AuthContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import api from '../../services/api';
 import StatCard from '../../components/ui/StatCard';
+import { DashboardSkeleton } from '../../components/ui/Skeleton';
 import { formatCurrency } from '../../utils/format';
 import {
   TrendingUp, TrendingDown, Wallet, Sparkles, ArrowRightLeft,
   AlertTriangle, Clock, Lightbulb, RefreshCw, ChevronDown, ChevronUp,
   Settings, Plus
 } from 'lucide-react';
+import Chart from 'react-apexcharts';
 import {
-  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
+  Tooltip, ResponsiveContainer,
   LineChart, Line, XAxis, YAxis, CartesianGrid, Legend, Area, AreaChart,
 } from 'recharts';
 
@@ -73,6 +76,21 @@ export default function DashboardPage() {
 
   const donutData = data.byCategory.map(c => ({ name: c.name, value: c.total, icon: c.icon }));
 
+  // ApexCharts donut options
+  const donutOptions = {
+    chart: { type: 'donut', background: 'transparent', animations: { enabled: true, easing: 'easeinout', speed: 800, animateGradually: { enabled: true, delay: 150 } } },
+    labels: donutData.map(c => `${c.icon || ''} ${c.name}`),
+    colors: CATEGORY_COLORS.slice(0, donutData.length),
+    stroke: { show: false },
+    dataLabels: { enabled: false },
+    legend: { show: true, position: 'right', labels: { colors: '#94a3b8' }, fontSize: '12px', markers: { width: 10, height: 10, radius: 2 } },
+    plotOptions: { pie: { donut: { size: '65%', labels: { show: true, name: { color: '#f1f5f9' }, value: { color: '#f1f5f9', formatter: (v) => formatCurrency(Number(v)) }, total: { show: true, label: 'Total', color: '#94a3b8', formatter: (w) => formatCurrency(w.globals.seriesTotals.reduce((a, b) => a + b, 0)) } } } } },
+    tooltip: { theme: 'dark', y: { formatter: (v) => formatCurrency(v) } },
+    responsive: [{ breakpoint: 600, options: { legend: { position: 'bottom' } } }],
+  };
+
+  if (loading) return <DashboardSkeleton />;
+
   return (
     <div>
       {/* Header */}
@@ -104,10 +122,10 @@ export default function DashboardPage() {
 
       {/* Stat Cards */}
       <div className="grid grid-4" style={{ marginBottom: '1.5rem' }}>
-        <StatCard label="Receitas" value={formatCurrency(data.stats.income)} icon={<TrendingUp size={20} />} variant="income" />
-        <StatCard label="Despesas" value={formatCurrency(data.stats.expenses)} icon={<TrendingDown size={20} />} variant="expense" />
-        <StatCard label="Seu Saldo" value={formatCurrency(data.stats.balance)} icon={<Wallet size={20} />} variant="balance" />
-        <StatCard label="Quanto Sobrou (%)" value={`${data.stats.savingsRate}%`} sub="do total de receitas" icon={<Sparkles size={20} />} variant="savings" />
+        <StatCard label="Receitas" value={formatCurrency(data.stats.income)} icon={<TrendingUp size={20} />} variant="income" index={0} />
+        <StatCard label="Despesas" value={formatCurrency(data.stats.expenses)} icon={<TrendingDown size={20} />} variant="expense" index={1} />
+        <StatCard label="Seu Saldo" value={formatCurrency(data.stats.balance)} icon={<Wallet size={20} />} variant="balance" index={2} />
+        <StatCard label="Quanto Sobrou (%)" value={`${data.stats.savingsRate}%`} sub="do total de receitas" icon={<Sparkles size={20} />} variant="savings" index={3} />
       </div>
 
       {/* Transfers Info */}
@@ -131,33 +149,13 @@ export default function DashboardPage() {
 
       {/* Charts Row */}
       <div className="grid grid-2" style={{ marginBottom: '1.5rem' }}>
-        {/* Donut Chart */}
+        {/* Donut Chart — ApexCharts */}
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">Gastos por Categoria</h3>
           </div>
           {donutData.length > 0 ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <ResponsiveContainer width="50%" height={200}>
-                <PieChart>
-                  <Pie data={donutData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2}>
-                    {donutData.map((_, i) => (
-                      <Cell key={i} fill={CATEGORY_COLORS[i % CATEGORY_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }} />
-                </PieChart>
-              </ResponsiveContainer>
-              <div style={{ flex: 1, fontSize: '0.8rem' }}>
-                {donutData.map((c, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.375rem' }}>
-                    <span style={{ width: 10, height: 10, borderRadius: 2, background: CATEGORY_COLORS[i % CATEGORY_COLORS.length], flexShrink: 0 }} />
-                    <span style={{ flex: 1, color: 'var(--text-secondary)' }}>{c.icon} {c.name}</span>
-                    <span style={{ fontWeight: 600 }}>{getTotalExpenses() > 0 ? ((c.value / getTotalExpenses()) * 100).toFixed(0) : 0}%</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <Chart options={donutOptions} series={donutData.map(c => c.value)} type="donut" height={280} />
           ) : (
             <div className="empty-state" style={{ padding: '2rem' }}>
               <p>Sem dados de gastos ainda</p>
@@ -223,11 +221,19 @@ export default function DashboardPage() {
                     {expandedInsight === i ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                   </button>
                 </div>
-                {expandedInsight === i && (
-                  <p style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                    {insight.description}
-                  </p>
-                )}
+                <AnimatePresence>
+                  {expandedInsight === i && (
+                    <motion.p
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.25 }}
+                      style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6, overflow: 'hidden' }}
+                    >
+                      {insight.description}
+                    </motion.p>
+                  )}
+                </AnimatePresence>
               </div>
             ))}
           </div>

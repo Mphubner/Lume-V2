@@ -331,6 +331,17 @@ select {
   color: rgba(255, 255, 255, 0.6);
   margin-top: 0.25rem;
 }
+.stat-card-alert {
+  border: 1.5px solid var(--accent-gold) !important;
+  box-shadow: 0 0 12px var(--accent-gold-dim), 0 0 24px rgba(212, 168, 67, 0.1);
+}
+.stat-card-alert-icon {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  color: var(--accent-gold);
+  z-index: 2;
+}
 
 /* ---- Grid ---- */
 .grid { display: grid; gap: 1.5rem; }
