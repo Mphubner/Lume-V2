@@ -43,9 +43,28 @@ export const authMiddleware = async (req, res, next) => {
   }
 };
 
-export const adminMiddleware = (req, res, next) => {
-  if (req.user.role !== 'admin') {
+export const adminMiddleware = async (req, res, next) => {
+  const adminEmails = (process.env.ADMIN_EMAIL || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  const userEmail = (req.user.email || '').toLowerCase();
+
+  // Check both: DB role OR env variable match
+  const isAdminByRole = req.user.role === 'admin';
+  const isAdminByEmail = adminEmails.includes(userEmail);
+
+  if (!isAdminByRole && !isAdminByEmail) {
     return res.status(403).json({ error: 'Acesso restrito a administradores' });
   }
+
+  // If matched by email but DB role is outdated, sync it
+  if (isAdminByEmail && !isAdminByRole && supabase) {
+    try {
+      await supabase.from('profiles').update({ role: 'admin' }).eq('id', req.user.id);
+      req.user.role = 'admin';
+      console.log(`🔑 Admin role synced for ${userEmail}`);
+    } catch (e) {
+      // Non-blocking — continue even if sync fails
+    }
+  }
+
   next();
 };
