@@ -83,15 +83,18 @@ export function AuthProvider({ children }) {
   // OAuth (Google, etc.)
   const signIn = async (provider = 'google') => {
     if (isDemoMode) return;
-    const options = {
+    const { data, error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
         redirectTo: `${window.location.origin}/dashboard`,
         scopes: provider === 'google' ? 'https://www.googleapis.com/auth/calendar.events' : undefined,
+        skipBrowserRedirect: true,
       },
-    };
-    const { error } = await supabase.auth.signInWithOAuth(options);
+    });
     if (error) throw error;
+    if (data?.url) {
+      window.location.href = data.url;
+    }
   };
 
   // Email + Password login
