@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { supabase } from '../../config/supabase';
+import { supabase } from '../../services/supabase';
 import api from '../../services/api';
 import { Sun, User, Building2, CreditCard, ArrowRight, ArrowLeft, Check, PiggyBank, TrendingDown, Wallet, Users, Info } from 'lucide-react';
 
