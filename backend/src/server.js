@@ -45,9 +45,9 @@ app.use(cors({
 
 // Rate Limiting
 const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per `window` (here, per 15 minutes)
-  message: 'Muitas requisições deste IP, tente novamente em 15 minutos.',
+  windowMs: 1 * 60 * 1000, // 1 minuto
+  max: 500, // 500 requests por minuto por IP (SPAs fazem muitas chamadas paralelas)
+  message: { error: 'Muitas requisições, aguarde um momento.' },
   standardHeaders: true,
   legacyHeaders: false,
 });

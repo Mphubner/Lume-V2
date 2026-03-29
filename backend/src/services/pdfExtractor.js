@@ -176,55 +176,83 @@ Saída: {"data": "20/03/2025", "descricao": "Rendimento Poupança", "valor": 12.
 ${textChunk}
 --- FIM DO EXTRATO ---`;
 
-  try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-        temperature: 0.05,
-        max_tokens: 8192,
-        response_format: { type: 'json_object' },
-      }),
-    });
+  const makeRequest = async (retries = 3, delay = 4000) => {
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage },
+          ],
+          temperature: 0.05, // Muito baixo para garantir formatação estruturada
+          max_tokens: 2048, // Reduzido de 8192. O Groq cobra (max_tokens + prompt) do limite TPM por minuto.
+          response_format: { type: 'json_object' },
+        }),
+      });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`AI extraction error (${response.status}):`, errText);
+      if (response.status === 429 && retries > 0) {
+        console.warn(`⏳ AI Rate limite atingido (429). Aguardando ${delay/1000}s para tentar novamente...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return makeRequest(retries - 1, delay * 1.5);
+      }
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(`AI extraction error (${response.status}):`, errText);
+        return [];
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+
+      if (!content) {
+        console.warn('AI returned empty content for PDF extraction');
+        return [];
+      }
+
+      const parsed = JSON.parse(content);
+      const transacoes = parsed.transacoes || parsed.transactions || [];
+
+      console.log(`🤖 AI extracted ${transacoes.length} transactions (tokens: ${data.usage?.total_tokens || '?'})`);
+
+      return transacoes.map(t => {
+        let amountParsed = 0;
+        const val = t.valor !== undefined ? t.valor : t.amount;
+        
+        if (typeof val === 'number') {
+          amountParsed = val;
+        } else if (typeof val === 'string') {
+          // Trata formatos "80.000,00" removendo pontos e trocando virgula por ponto -> "80000.00"
+          const cleanStr = val.replace(/\./g, '').replace(',', '.');
+          amountParsed = parseFloat(cleanStr);
+        }
+
+        return {
+          date: t.data || t.date,
+          description: t.descricao || t.description || '',
+          amount: isNaN(amountParsed) ? 0 : amountParsed,
+          category: t.categoria || t.category || null,
+        };
+      });
+
+    } catch (err) {
+      if (retries > 0) {
+        console.warn(`⏳ AI Request falhou: ${err.message}. Retentando...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return makeRequest(retries - 1, delay * 1.5);
+      }
+      console.error('PDF AI extraction completely failed:', err.message);
       return [];
     }
+  };
 
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
-
-    if (!content) {
-      console.warn('AI returned empty content for PDF extraction');
-      return [];
-    }
-
-    const parsed = JSON.parse(content);
-    const transacoes = parsed.transacoes || parsed.transactions || [];
-
-    console.log(`🤖 AI extracted ${transacoes.length} transactions (tokens: ${data.usage?.total_tokens || '?'})`);
-
-    return transacoes.map(t => ({
-      date: t.data || t.date,
-      description: t.descricao || t.description || '',
-      amount: typeof t.valor === 'number' ? t.valor : (typeof t.amount === 'number' ? t.amount : parseFloat(String(t.valor || t.amount || 0).replace(',', '.'))),
-      category: t.categoria || t.category || null,
-    }));
-
-  } catch (err) {
-    console.error('PDF AI extraction failed:', err.message);
-    return [];
-  }
+  return makeRequest();
 }
 
 /**
