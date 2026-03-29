@@ -21,15 +21,14 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleGoogleLogin = async () => {
+  const handleGoogleLogin = () => {
     setLoading(true);
     setError('');
-    try {
-      await signIn('google');
-    } catch (err) {
-      setError('Erro ao fazer login com Google. Tente novamente.');
+    signIn('google').catch((err) => {
+      console.error(err);
+      setError(`Erro Google: ${err.message || 'Bloqueado pelo navegador'}`);
       setLoading(false);
-    }
+    });
   };
 
   const handleEmailLogin = async (e) => {

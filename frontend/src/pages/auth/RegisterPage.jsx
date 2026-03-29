@@ -31,9 +31,13 @@ export default function RegisterPage() {
     return null;
   };
 
-  const handleGoogleSignup = async () => {
+  const handleGoogleSignup = () => {
     setLoading(true);
-    try { await signIn('google'); } catch { setError('Erro ao cadastrar com Google.'); setLoading(false); }
+    signIn('google').catch((err) => { 
+      console.error(err);
+      setError(`Erro ao cadastrar com Google: ${err.message || 'Bloqueado pelo navegador'}`); 
+      setLoading(false); 
+    });
   };
 
   const handleSubmit = async (e) => {

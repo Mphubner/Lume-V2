@@ -88,13 +88,9 @@ export function AuthProvider({ children }) {
       options: {
         redirectTo: `${window.location.origin}/dashboard`,
         scopes: provider === 'google' ? 'https://www.googleapis.com/auth/calendar.events' : undefined,
-        skipBrowserRedirect: true,
       },
     });
     if (error) throw error;
-    if (data?.url) {
-      window.location.href = data.url;
-    }
   };
 
   // Email + Password login
