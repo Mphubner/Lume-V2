@@ -76,7 +76,6 @@ export default function DashboardPage() {
 
   const donutData = data.byCategory.map(c => ({ name: c.name, value: c.total, icon: c.icon }));
 
-  // ApexCharts donut options
   const donutOptions = {
     chart: { type: 'donut', background: 'transparent', animations: { enabled: true, easing: 'easeinout', speed: 800, animateGradually: { enabled: true, delay: 150 } } },
     labels: donutData.map(c => `${c.icon || ''} ${c.name}`),
@@ -88,6 +87,21 @@ export default function DashboardPage() {
     tooltip: { theme: 'dark', y: { formatter: (v) => formatCurrency(v) } },
     responsive: [{ breakpoint: 600, options: { legend: { position: 'bottom' } } }],
   };
+
+  const evolutionOptions = {
+    chart: { type: 'area', background: 'transparent', toolbar: { show: false }, zoom: { enabled: true, type: 'x' } },
+    colors: ['#22c55e', '#f43f5e'],
+    dataLabels: { enabled: false },
+    stroke: { curve: 'smooth', width: 2 },
+    xaxis: { categories: evolutionData.map(m => m.monthLabel), labels: { style: { colors: '#94a3b8' } }, axisBorder: { show: false }, axisTicks: { show: false } },
+    yaxis: { labels: { style: { colors: '#94a3b8' }, formatter: (v) => `${(v / 1000).toFixed(0)}k` } },
+    grid: { borderColor: 'var(--border-color)', strokeDashArray: 3, xaxis: { lines: { show: true } }, yaxis: { lines: { show: true } } },
+    tooltip: { theme: 'dark', y: { formatter: (v) => formatCurrency(v) } },
+    legend: { labels: { colors: '#94a3b8' }, markers: { width: 10, height: 10, radius: 2 } },
+    fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05, stops: [0, 90, 100] } }
+  };
+
+  const hasUrgentAlert = data.byCategory.some(c => c.name === 'Outros' && c.total > 0) || data.stats.expenses > data.stats.income;
 
   if (loading) return <DashboardSkeleton />;
 
@@ -123,7 +137,7 @@ export default function DashboardPage() {
       {/* Stat Cards */}
       <div className="grid grid-4" style={{ marginBottom: '1.5rem' }}>
         <StatCard label="Receitas" value={formatCurrency(data.stats.income)} icon={<TrendingUp size={20} />} variant="income" index={0} />
-        <StatCard label="Despesas" value={formatCurrency(data.stats.expenses)} icon={<TrendingDown size={20} />} variant="expense" index={1} />
+        <StatCard label="Despesas" value={formatCurrency(data.stats.expenses)} icon={<TrendingDown size={20} />} variant="expense" index={1} alert={hasUrgentAlert} />
         <StatCard label="Seu Saldo" value={formatCurrency(data.stats.balance)} icon={<Wallet size={20} />} variant="balance" index={2} />
         <StatCard label="Quanto Sobrou (%)" value={`${data.stats.savingsRate}%`} sub="do total de receitas" icon={<Sparkles size={20} />} variant="savings" index={3} />
       </div>
@@ -163,25 +177,20 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Line Chart */}
+        {/* Line Chart — ApexCharts Area */}
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">Evolução Mensal</h3>
           </div>
-          <ResponsiveContainer width="100%" height={230}>
-            <LineChart data={evolutionData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-              <XAxis dataKey="monthLabel" stroke="var(--text-muted)" fontSize={12} />
-              <YAxis stroke="var(--text-muted)" fontSize={12} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-              <Tooltip
-                contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }}
-                formatter={(v, name) => [formatCurrency(v), name === 'income' ? 'Receitas' : name === 'expenses' ? 'Despesas' : 'Saldo']}
-              />
-              <Legend formatter={(value) => value === 'income' ? '🟢 Receitas' : value === 'expenses' ? '🔴 Despesas' : ''} />
-              <Line type="monotone" dataKey="income" stroke="var(--color-success)" strokeWidth={2} dot={{ r: 3 }} />
-              <Line type="monotone" dataKey="expenses" stroke="var(--color-danger)" strokeWidth={2} dot={{ r: 3 }} />
-            </LineChart>
-          </ResponsiveContainer>
+          <Chart 
+            options={evolutionOptions} 
+            series={[
+              { name: 'Receitas', data: evolutionData.map(m => m.income) },
+              { name: 'Despesas', data: evolutionData.map(m => m.expenses) }
+            ]} 
+            type="area" 
+            height={280} 
+          />
         </div>
       </div>
 

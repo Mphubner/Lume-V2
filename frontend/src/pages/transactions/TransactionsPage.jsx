@@ -1,6 +1,14 @@
 import { useState, useEffect } from 'react';
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+} from '@tanstack/react-table';
 import api from '../../services/api';
 import StatCard from '../../components/ui/StatCard';
+import BottomSheet from '../../components/ui/BottomSheet';
+import { TransactionsSkeleton } from '../../components/ui/Skeleton';
 import { formatCurrency, formatDate, getMonthName } from '../../utils/format';
 import { Plus, Search, ArrowLeftRight, ChevronLeft, ChevronRight, RefreshCw, Filter } from 'lucide-react';
 
@@ -17,10 +25,19 @@ export default function TransactionsPage() {
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ description: '', amount: '', type: 'expense', date: new Date().toISOString().split('T')[0], category_id: '', account_type: 'personal' });
+  const [sorting, setSorting] = useState([]);
 
   useEffect(() => {
     loadData();
-  }, [activeTab, month, year, page, search]);
+  }, [activeTab, month, year, page]); // Removed 'search' so we can trigger it explicitly or debounce, but leaving it simple for now, we'll fetch on Enter key or button if needed. Or keep search, let's keep search but handle local state carefully.
+
+  // Fetch when search changes (debounce via useQuery would be better, but doing simple here)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      loadData();
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const loadData = async () => {
     setLoading(true);
@@ -83,6 +100,55 @@ export default function TransactionsPage() {
     acc[date].push(tx);
     return acc;
   }, {});
+
+  // TanStack Table setup
+  const columns = [
+    {
+      accessorKey: 'date',
+      header: 'Data',
+      cell: info => <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{formatDate(info.getValue())}</span>,
+    },
+    {
+      accessorKey: 'description',
+      header: 'Descrição',
+      cell: info => <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{info.getValue()}</div>,
+    },
+    {
+      id: 'category',
+      accessorFn: row => row.categories?.name,
+      header: 'Categoria',
+      cell: info => {
+        const row = info.row.original;
+        return (
+          <span className="badge" style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
+            {row.categories?.icon} {row.categories?.name || 'Sem categoria'}
+          </span>
+        );
+      }
+    },
+    {
+      accessorKey: 'amount',
+      header: 'Valor',
+      cell: info => {
+        const val = info.getValue();
+        const color = (info.row.original.type === 'income' || val > 0) ? 'var(--color-success)' : 'var(--color-danger)';
+        return (
+          <div style={{ color, fontWeight: 700, textAlign: 'right' }}>
+            {val > 0 ? '+' : ''}{formatCurrency(val)}
+          </div>
+        );
+      }
+    }
+  ];
+
+  const table = useReactTable({
+    data: transactions,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
 
   return (
     <div>
@@ -154,13 +220,47 @@ export default function TransactionsPage() {
         )}
 
         {loading ? (
-          <div className="loading-spinner"><div className="spinner" /></div>
+          <div style={{ padding: '1rem' }}>
+            <TransactionsSkeleton />
+          </div>
         ) : transactions.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state-icon">💰</div>
             <h3>Nenhuma transação encontrada</h3>
             <p>Adicione sua primeira transação ou importe um extrato bancário</p>
             <button className="btn btn-primary" onClick={() => setShowModal(true)}><Plus size={16} /> Nova Transação</button>
+          </div>
+        ) : activeTab === 'all' ? (
+          <div className="table-responsive" style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem', textAlign: 'left' }}>
+              <thead>
+                {table.getHeaderGroups().map(headerGroup => (
+                  <tr key={headerGroup.id} style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
+                    {headerGroup.headers.map(header => (
+                      <th 
+                        key={header.id} 
+                        onClick={header.column.getToggleSortingHandler()} 
+                        style={{ padding: '1rem', color: 'var(--text-muted)', fontWeight: 600, cursor: header.column.getCanSort() ? 'pointer' : 'default', whiteSpace: 'nowrap', textAlign: header.id === 'amount' ? 'right' : 'left' }}
+                      >
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {{ asc: ' 🔼', desc: ' 🔽' }[header.column.getIsSorted()] ?? null}
+                      </th>
+                    ))}
+                  </tr>
+                ))}
+              </thead>
+              <tbody>
+                {table.getRowModel().rows.map(row => (
+                  <tr key={row.id} style={{ borderBottom: '1px solid var(--border-color)', transition: 'background 0.2s' }} className="table-row-hover">
+                    {row.getVisibleCells().map(cell => (
+                      <td key={cell.id} style={{ padding: '1rem' }}>
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         ) : (
           <div>
@@ -189,59 +289,50 @@ export default function TransactionsPage() {
         )}
       </div>
 
-      {/* New Transaction Modal */}
-      {showModal && (
-        <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h2>+ Nova Transação</h2>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Lançamento manual</p>
+      <BottomSheet isOpen={showModal} onClose={() => setShowModal(false)} title="Nova Transação">
+        <form onSubmit={handleSubmit}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', paddingBottom: '1rem' }}>
+            <div className="grid grid-2" style={{ gap: '1rem' }}>
+              <div className="form-group">
+                <label>Data</label>
+                <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required />
               </div>
-              <button onClick={() => setShowModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button>
+              <div className="form-group">
+                <label>Tipo</label>
+                <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+                  <option value="income">Receita</option>
+                  <option value="expense">Despesa</option>
+                  <option value="transfer">Transferência</option>
+                </select>
+              </div>
             </div>
-            <form onSubmit={handleSubmit}>
-              <div className="modal-body">
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>Data</label>
-                    <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required />
-                  </div>
-                  <div className="form-group">
-                    <label>Tipo</label>
-                    <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
-                      <option value="income">Receita</option>
-                      <option value="expense">Despesa</option>
-                      <option value="transfer">Transferência</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="form-group">
-                  <label>Descrição *</label>
-                  <input type="text" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Ex: Salário, Supermercado..." required />
-                </div>
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>Valor * (positivo = entrada, negativo = saída)</label>
-                    <input type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} placeholder="R$ 0,00" required />
-                  </div>
-                  <div className="form-group">
-                    <label>Tipo de Conta</label>
-                    <select value={form.account_type} onChange={e => setForm({ ...form, account_type: e.target.value })}>
-                      <option value="personal">Pessoal</option>
-                      <option value="business">Empresarial</option>
-                    </select>
-                  </div>
-                </div>
+            
+            <div className="form-group">
+              <label>Descrição *</label>
+              <input type="text" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Ex: Salário, Supermercado..." required />
+            </div>
+
+            <div className="grid grid-2" style={{ gap: '1rem' }}>
+              <div className="form-group">
+                <label>Valor * (R$)</label>
+                <input type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} placeholder="0,00" required />
               </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancelar</button>
-                <button type="submit" className="btn btn-primary">💾 Salvar</button>
+              <div className="form-group">
+                <label>Tipo de Conta</label>
+                <select value={form.account_type} onChange={e => setForm({ ...form, account_type: e.target.value })}>
+                  <option value="personal">Pessoal</option>
+                  <option value="business">Empresarial</option>
+                </select>
               </div>
-            </form>
+            </div>
+            
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
+              <button type="button" className="btn btn-secondary flex-1" onClick={() => setShowModal(false)}>Cancelar</button>
+              <button type="submit" className="btn btn-primary flex-1">Salvar</button>
+            </div>
           </div>
-        </div>
-      )}
+        </form>
+      </BottomSheet>
     </div>
   );
 }
