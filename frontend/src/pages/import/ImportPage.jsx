@@ -3,7 +3,6 @@ import api from '../../services/api';
 import { Upload as UploadIcon, FileText, CheckCircle, AlertTriangle, Building2, Loader2, RefreshCw } from 'lucide-react';
 import PluggyWidget from '../../components/ui/PluggyWidget';
 import ImportAuditModal from './ImportAuditModal';
-import './ImportPage.css';
 
 export default function ImportPage() {
   const [accountType, setAccountType] = useState('checking');
