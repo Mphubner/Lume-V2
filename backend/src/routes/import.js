@@ -3,6 +3,7 @@ import { authMiddleware } from '../middleware/auth.js';
 import { supabase } from '../config/supabase.js';
 import multer from 'multer';
 import { categorizeTransaction } from '../services/aiService.js';
+import { extractTransactionsFromPDF } from '../services/pdfExtractor.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -33,7 +34,10 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     // Parse file
     let rawTransactions = [];
 
-    if (fileType === 'ofx') {
+    if (fileType === 'pdf') {
+      // ---- NEW: Full AI-powered PDF extraction pipeline ----
+      rawTransactions = await extractTransactionsFromPDF(req.file.buffer);
+    } else if (fileType === 'ofx') {
       rawTransactions = parseOFX(req.file.buffer.toString());
     } else if (fileType === 'csv') {
       rawTransactions = parseCSV(req.file.buffer.toString());
@@ -49,6 +53,16 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       }));
     }
 
+    if (rawTransactions.length === 0) {
+      await supabase.from('imports').update({ status: 'empty', total_transactions: 0 }).eq('id', importRecord.id);
+      return res.json({
+        success: false,
+        total: 0, imported: 0, duplicates: 0,
+        importId: importRecord.id,
+        message: 'Nenhuma transação foi encontrada no arquivo. Verifique se o formato está correto.'
+      });
+    }
+
     // Get user categories and AI rules
     const [categories, rules] = await Promise.all([
       supabase.from('categories').select('*').or(`user_id.eq.${req.user.id},is_system.eq.true`),
@@ -62,31 +76,50 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     let duplicates = 0;
 
     for (const raw of rawTransactions) {
-      if (!raw.description || !raw.amount) continue;
+      if (!raw.description || raw.amount === undefined || raw.amount === null) continue;
+
+      // Normalize date: try to convert BR format DD/MM/YYYY to ISO
+      let normalizedDate = raw.date || new Date().toISOString().split('T')[0];
+      if (/^\d{2}\/\d{2}\/\d{4}$/.test(normalizedDate)) {
+        const [d, m, y] = normalizedDate.split('/');
+        normalizedDate = `${y}-${m}-${d}`;
+      } else if (/^\d{2}\/\d{2}\/\d{2}$/.test(normalizedDate)) {
+        const [d, m, y] = normalizedDate.split('/');
+        normalizedDate = `20${y}-${m}-${d}`;
+      }
 
       // Hash to prevent duplicates
-      const hash = Buffer.from(`${raw.date}-${raw.description}-${raw.amount}`).toString('base64');
+      const hash = Buffer.from(`${normalizedDate}-${raw.description}-${raw.amount}`).toString('base64');
 
       const { data: existing } = await supabase.from('transactions').select('id').eq('import_hash', hash).eq('user_id', req.user.id).limit(1);
       if (existing?.length > 0) { duplicates++; continue; }
 
       // AI categorization
       let categoryId = null;
-      // First check user rules
-      const matchedRule = userRules.find(r => raw.description.toLowerCase().includes(r.keyword.toLowerCase()));
+      const descLower = raw.description.toLowerCase();
+      const matchedRule = userRules.find(r => descLower.includes(r.keyword.toLowerCase()));
       if (matchedRule) {
         const cat = catList.find(c => c.name === matchedRule.category_name);
         categoryId = cat?.id;
-        // Increment rule usage
         const rule = (rules.data || []).find(r => r.keyword.toLowerCase() === matchedRule.keyword.toLowerCase());
         if (rule) {
           await supabase.from('ai_rules').update({ usage_count: rule.usage_count + 1 }).eq('id', rule.id);
         }
-      } else {
-        // Use AI
-        const aiResult = await categorizeTransaction(raw.description, raw.amount, catList, userRules);
-        const cat = catList.find(c => c.name === aiResult.category);
+      } else if (raw.category) {
+        // If AI extraction already suggested a category, try to match
+        const cat = catList.find(c => c.name.toLowerCase() === raw.category.toLowerCase());
         categoryId = cat?.id;
+      }
+      
+      if (!categoryId) {
+        // Fallback: Use AI for categorization
+        try {
+          const aiResult = await categorizeTransaction(raw.description, raw.amount, catList, userRules);
+          const cat = catList.find(c => c.name === aiResult.category);
+          categoryId = cat?.id;
+        } catch (e) {
+          // Silently continue — category remains null
+        }
       }
 
       await supabase.from('transactions').insert({
@@ -97,7 +130,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         raw_description: raw.description,
         amount: raw.amount,
         type: raw.amount >= 0 ? 'income' : 'expense',
-        date: raw.date || new Date().toISOString().split('T')[0],
+        date: normalizedDate,
         origin: 'import',
         import_hash: hash,
         is_confirmed: true,
@@ -169,7 +202,6 @@ function parseCSV(content) {
     const cols = lines[i].split(/[;,]/);
     if (cols.length < 2) continue;
     
-    // Try to auto-detect columns
     let date = '', description = '', amount = 0;
     
     if (header.includes('data') || header.includes('date')) {
@@ -177,7 +209,6 @@ function parseCSV(content) {
       description = cols[1]?.trim();
       amount = parseFloat((cols[2] || cols[3] || '0').replace(/[^\d.,-]/g, '').replace(',', '.'));
     } else {
-      // fallback to common formats
       date = cols[0]?.trim();
       description = cols[1]?.trim();
       amount = parseFloat((cols[cols.length - 1] || '0').replace(/[^\d.,-]/g, '').replace(',', '.'));
