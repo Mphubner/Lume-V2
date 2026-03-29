@@ -3,7 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import { formatCurrency } from '../../utils/format';
 import calendarService from '../../services/calendarService';
-import { Save, Trash2, Plus, Edit3, Users, CreditCard, Settings as SettingsIcon, Calendar } from 'lucide-react';
+import { Save, Trash2, Plus, Edit3, Users, CreditCard, Settings as SettingsIcon, Calendar, Building2 } from 'lucide-react';
 
 export default function SettingsPage() {
   const { profile, user, refreshProfile } = useAuth();
@@ -21,9 +21,13 @@ export default function SettingsPage() {
   const [accountForm, setAccountForm] = useState({ name: '', type: 'checking', account_type: 'personal', institution: '', balance: '0', credit_limit: '', closing_day: '', due_day: '', color: '#d4a843', icon: '🏦' });
   const [saving, setSaving] = useState(false);
   const [syncingCalendar, setSyncingCalendar] = useState(false);
-  const [familyData, setFamilyData] = useState({ hasFamily: false, members: [] });
+  const [familyData, setFamilyData] = useState({ hasFamily: false, members: [], families: [], businesses: [] });
   const [showFamilyModal, setShowFamilyModal] = useState(false);
-  const [familyForm, setFamilyForm] = useState({ name: '', email: '', password: '', role: 'member' });
+  const [familyForm, setFamilyForm] = useState({ name: '', email: '', password: '', role: 'member', entity_id: '' });
+  const [showEntityModal, setShowEntityModal] = useState(false);
+  const [entityForm, setEntityForm] = useState({ name: '' });
+
+  const isGrantedMember = profile?.plan_status === 'granted';
 
   useEffect(() => {
     if (profile) {
@@ -70,7 +74,12 @@ export default function SettingsPage() {
   const loadFamily = async () => {
     try {
       const result = await api.getFamily();
-      setFamilyData(result);
+      setFamilyData({
+        hasFamily: result.hasFamily,
+        members: result.members || [],
+        families: result.families || [],
+        businesses: result.businesses || [],
+      });
     } catch (err) { console.error(err); }
   };
 
@@ -78,13 +87,31 @@ export default function SettingsPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.createFamilyMember(familyForm);
+      const payload = { ...familyForm };
+      if (!payload.entity_id) delete payload.entity_id; // Let backend use default family
+      await api.createFamilyMember(payload);
       setShowFamilyModal(false);
-      setFamilyForm({ name: '', email: '', password: '', role: 'member' });
+      setFamilyForm({ name: '', email: '', password: '', role: 'member', entity_id: '' });
       alert('Membro adicionado com sucesso!');
       loadFamily();
     } catch (err) {
       alert(err.message || 'Erro ao criar usuário.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createEntity = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.createEntity({ name: entityForm.name, type: 'business' });
+      setShowEntityModal(false);
+      setEntityForm({ name: '' });
+      alert('Empresa cadastrada com sucesso!');
+      loadFamily();
+    } catch (err) {
+      alert(err.message || 'Erro ao cadastrar empresa.');
     } finally {
       setSaving(false);
     }
@@ -124,11 +151,13 @@ export default function SettingsPage() {
   };
   const deleteAccount = async (id) => { if (confirm('Excluir esta conta?')) { try { await api.deleteAccount(id); loadAccounts(); } catch {} } };
 
+  const allEntities = [...familyData.families, ...familyData.businesses];
+
   const TABS = [
     { key: 'profile', label: '👤 Perfil' },
     { key: 'preferences', label: '⚙️ Contas e Categorias' },
-    { key: 'subscription', label: '💳 Assinatura' },
-    { key: 'family', label: '👥 Família' },
+    ...(!isGrantedMember ? [{ key: 'subscription', label: '💳 Assinatura' }] : []),
+    { key: 'family', label: '👥 Espaços & Equipe' },
     { key: 'ai', label: '🤖 IA' },
     { key: 'integrations', label: '🔌 Integrações' },
     { key: 'audit', label: '📋 Auditoria' },
@@ -269,45 +298,106 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* FAMILY TAB */}
+      {/* FAMILY / SPACES TAB */}
       {activeTab === 'family' && (
-        <div className="card" style={{ maxWidth: 650 }}>
-          <div className="card-header"><h3 className="card-title"><Users size={18} /> Equipe e Família</h3><button className="btn btn-primary btn-sm" onClick={() => setShowFamilyModal(true)}><Plus size={14} /> Novo Membro</button></div>
-          
-          <div style={{ padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--border-radius-sm)', display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-            <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--accent-gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: 'var(--text-dark)' }}>{(profile?.full_name || 'U')[0]}</div>
-            <div><div style={{ fontWeight: 600 }}>{profile?.full_name || 'Você'}</div><div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{user?.email} • Admin / Dono</div></div>
-            <span className="badge badge-success" style={{ marginLeft: 'auto' }}>👑 Owner</span>
+        <div style={{ maxWidth: 750 }}>
+          {/* Current User Card */}
+          <div className="card" style={{ marginBottom: '1.5rem' }}>
+            <div style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--accent-gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: 'var(--text-dark)' }}>{(profile?.full_name || 'U')[0]}</div>
+              <div><div style={{ fontWeight: 600 }}>{profile?.full_name || 'Você'}</div><div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{user?.email} • {isGrantedMember ? 'Membro Convidado' : 'Admin / Dono'}</div></div>
+              <span className={`badge ${isGrantedMember ? 'badge-info' : 'badge-success'}`} style={{ marginLeft: 'auto' }}>{isGrantedMember ? '👤 Membro' : '👑 Owner'}</span>
+            </div>
           </div>
 
-          <h4 style={{ marginBottom: '1rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>Membros Vinculados</h4>
-          {familyData.members.filter(m => m.id !== user?.id).length === 0 ? (
-             <div style={{ textAlign: 'center', padding: '2rem' }}>
-               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Nenhum membro vinculado ainda.<br/>Convide sócios ou familiares para compartilhar a gestão.</p>
-               <button className="btn btn-primary" style={{ marginTop: '1rem' }} onClick={() => setShowFamilyModal(true)}><Plus size={16} /> Adicionar Usuário</button>
-             </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {familyData.members.filter(m => m.id !== user?.id).map((member, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-sm)' }}>
-                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--bg-modifier-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>{(member.name || 'U')[0]}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{member.name}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{member.email}</div>
+          {/* ---- FAMILY ENTITIES ---- */}
+          {familyData.families.map(fam => (
+            <div key={fam.id} className="card" style={{ marginBottom: '1.5rem' }}>
+              <div className="card-header">
+                <h3 className="card-title"><Users size={18} /> {fam.name || 'Minha Família'}</h3>
+                {!isGrantedMember && <button className="btn btn-primary btn-sm" onClick={() => { setFamilyForm({ ...familyForm, entity_id: fam.id }); setShowFamilyModal(true); }}><Plus size={14} /> Novo Membro</button>}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {(fam.members || []).map((member, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-sm)' }}>
+                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: member.role === 'owner' ? 'var(--accent-gold)' : 'var(--bg-modifier-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, color: member.role === 'owner' ? 'var(--text-dark)' : 'inherit' }}>{(member.name || 'U')[0]}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{member.name}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{member.email}</div>
+                    </div>
+                    <span className={`badge ${member.role === 'owner' ? 'badge-success' : 'badge-info'}`}>{member.role === 'owner' ? '👑 Owner' : 'member'}</span>
                   </div>
-                  <span className={`badge ${member.role === 'owner' ? 'badge-success' : 'badge-info'}`}>{member.role}</span>
-                </div>
-              ))}
+                ))}
+                {(!fam.members || fam.members.length === 0) && <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '1rem' }}>Nenhum membro vinculado.</p>}
+              </div>
+            </div>
+          ))}
+
+          {/* No family yet — prompt */}
+          {familyData.families.length === 0 && !isGrantedMember && (
+            <div className="card" style={{ marginBottom: '1.5rem', textAlign: 'center', padding: '2rem' }}>
+              <Users size={32} style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }} />
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>Nenhuma família criada ainda.<br/>Convide familiares para compartilhar a gestão financeira.</p>
+              <button className="btn btn-primary" onClick={() => { setFamilyForm({ ...familyForm, entity_id: '' }); setShowFamilyModal(true); }}><Plus size={16} /> Adicionar Primeiro Membro</button>
             </div>
           )}
 
+          {/* ---- BUSINESS ENTITIES ---- */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', marginTop: '1rem' }}>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Building2 size={20} /> Minhas Empresas</h3>
+            {!isGrantedMember && <button className="btn btn-primary btn-sm" onClick={() => setShowEntityModal(true)}><Plus size={14} /> Nova Empresa</button>}
+          </div>
+
+          {familyData.businesses.map(biz => (
+            <div key={biz.id} className="card" style={{ marginBottom: '1rem' }}>
+              <div className="card-header">
+                <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Building2 size={16} color="var(--accent-gold)" /> {biz.name}</h3>
+                {!isGrantedMember && <button className="btn btn-secondary btn-sm" onClick={() => { setFamilyForm({ ...familyForm, entity_id: biz.id }); setShowFamilyModal(true); }}><Plus size={14} /> Membro</button>}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {(biz.members || []).map((member, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-sm)' }}>
+                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--bg-modifier-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>{(member.name || 'U')[0]}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{member.name}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{member.email}</div>
+                    </div>
+                    <span className={`badge ${member.role === 'owner' ? 'badge-success' : 'badge-info'}`}>{member.role}</span>
+                  </div>
+                ))}
+                {(!biz.members || biz.members.length === 0) && <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '0.75rem' }}>Nenhum membro.</p>}
+              </div>
+            </div>
+          ))}
+
+          {familyData.businesses.length === 0 && !isGrantedMember && (
+            <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+              <Building2 size={32} style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }} />
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>Nenhuma empresa cadastrada.<br/>Cadastre sua empresa para separar finanças pessoais e empresariais.</p>
+              <button className="btn btn-primary" onClick={() => setShowEntityModal(true)}><Plus size={16} /> Cadastrar Empresa</button>
+            </div>
+          )}
+
+          {/* ---- MODALS ---- */}
+          {/* Add Member Modal */}
           {showFamilyModal && (
             <div className="modal-overlay" onClick={() => setShowFamilyModal(false)}>
               <div className="modal" onClick={e => e.stopPropagation()}>
-                <div className="modal-header"><h2>👥 Novo Usuário</h2><button onClick={() => setShowFamilyModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button></div>
+                <div className="modal-header"><h2>👥 Novo Membro</h2><button onClick={() => setShowFamilyModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button></div>
                 <form onSubmit={createFamilyMember}>
                   <div className="modal-body">
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>Crie as credenciais de acesso para a pessoa que poderá acessar e lançar movimentações nesta conta.</p>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>Crie as credenciais de acesso para a pessoa que poderá acessar e lançar movimentações.</p>
+                    {allEntities.length > 1 && (
+                      <div className="form-group">
+                        <label>Adicionar em qual espaço? *</label>
+                        <select value={familyForm.entity_id} onChange={e => setFamilyForm({ ...familyForm, entity_id: e.target.value })}>
+                          <option value="">Família (padrão)</option>
+                          {allEntities.map(ent => (
+                            <option key={ent.id} value={ent.id}>{ent.type === 'business' ? `🏢 ${ent.name}` : `👥 ${ent.name}`}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <div className="form-group"><label>Nome Completo *</label><input value={familyForm.name} onChange={e => setFamilyForm({ ...familyForm, name: e.target.value })} required /></div>
                     <div className="form-group"><label>E-mail de Login *</label><input type="email" value={familyForm.email} onChange={e => setFamilyForm({ ...familyForm, email: e.target.value })} required /></div>
                     <div className="form-row">
@@ -316,6 +406,22 @@ export default function SettingsPage() {
                     </div>
                   </div>
                   <div className="modal-footer"><button type="button" className="btn btn-secondary" onClick={() => setShowFamilyModal(false)}>Cancelar</button><button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Criando...' : 'Criar Acesso'}</button></div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Create Entity/Business Modal */}
+          {showEntityModal && (
+            <div className="modal-overlay" onClick={() => setShowEntityModal(false)}>
+              <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
+                <div className="modal-header"><h2>🏢 Nova Empresa</h2><button onClick={() => setShowEntityModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button></div>
+                <form onSubmit={createEntity}>
+                  <div className="modal-body">
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>Cadastre uma empresa para separar as finanças PJ das pessoais. Você poderá importar extratos em nome dela e convidar colaboradores.</p>
+                    <div className="form-group"><label>Nome da Empresa *</label><input value={entityForm.name} onChange={e => setEntityForm({ ...entityForm, name: e.target.value })} placeholder="Ex: Ateliê, Consultoria ABC..." required /></div>
+                  </div>
+                  <div className="modal-footer"><button type="button" className="btn btn-secondary" onClick={() => setShowEntityModal(false)}>Cancelar</button><button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Criando...' : 'Cadastrar Empresa'}</button></div>
                 </form>
               </div>
             </div>

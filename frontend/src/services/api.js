@@ -148,6 +148,7 @@ class ApiService {
   // Family / Workspaces
   getFamily() { return this.request('/family'); }
   createFamilyMember(data) { return this.request('/family/members', { method: 'POST', body: data }); }
+  createEntity(data) { return this.request('/family/entity', { method: 'POST', body: data }); }
 
   // Admin
   getKPIs() { return this.request('/admin/kpis'); }
