@@ -167,7 +167,7 @@ export default function SettingsPage() {
 
   const openNewCategory = () => {
     setEditingCategory(null);
-    setNewCat({ name: '', icon: '📦', type: 'expense', color: '#6366f1' });
+    setNewCat({ name: '', icon: '📦', type: 'expense', color: '#6366f1', parent_id: '', group_name: '', nature: 'variable' });
     setShowCatModal(true);
   };
 
@@ -177,7 +177,15 @@ export default function SettingsPage() {
        return;
     }
     setEditingCategory(cat);
-    setNewCat({ name: cat.name, icon: cat.icon || '📦', type: cat.type || 'expense', color: cat.color || '#6366f1' });
+    setNewCat({ 
+      name: cat.name, 
+      icon: cat.icon || '📦', 
+      type: cat.type || 'expense', 
+      color: cat.color || '#6366f1',
+      parent_id: cat.parent_id || '',
+      group_name: cat.group_name || '',
+      nature: cat.nature || 'variable'
+    });
     setShowCatModal(true);
   };
 
@@ -257,17 +265,34 @@ export default function SettingsPage() {
               <h3 className="card-title">📦 Categorias</h3>
               <button className="btn btn-primary btn-sm" onClick={openNewCategory}><Plus size={14} /> Nova Categoria</button>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-              {categories.map(cat => (
-                <button 
-                  key={cat.id} 
-                  onClick={() => openEditCategory(cat)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.375rem', padding: '0.375rem 0.75rem', borderRadius: 'var(--border-radius-full)', background: 'var(--bg-secondary)', fontSize: '0.85rem', border: `1px solid ${cat.color || 'var(--border-color)'}`, cursor: 'pointer' }}
-                >
-                  {cat.icon} {cat.name}
-                  {cat.is_system && <span className="badge badge-info" style={{ padding: '0 0.25rem', fontSize: '0.6rem' }}>sistema</span>}
-                  {!cat.is_system && <Edit3 size={12} style={{ opacity: 0.5, marginLeft: '0.25rem' }}/>}
-                </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+              {Object.entries(
+                categories.reduce((acc, cat) => {
+                  const group = cat.group_name || 'Outras / Personalizadas';
+                  if (!acc[group]) acc[group] = [];
+                  acc[group].push(cat);
+                  return acc;
+                }, {})
+              ).map(([group, cats]) => (
+                <div key={group}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {group}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    {cats.map(cat => (
+                      <button 
+                        key={cat.id} 
+                        onClick={() => openEditCategory(cat)}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.375rem', padding: '0.375rem 0.75rem', borderRadius: 'var(--border-radius-full)', background: 'var(--bg-secondary)', fontSize: '0.85rem', border: `1px solid ${cat.color || 'var(--border-color)'}`, cursor: 'pointer' }}
+                      >
+                        {cat.icon} {cat.name}
+                        {cat.is_system && <span className="badge badge-info" style={{ padding: '0 0.25rem', fontSize: '0.6rem' }}>sistema</span>}
+                        {cat.parent_id && <span style={{ opacity: 0.4, fontSize: '0.7rem', marginLeft: '0.2rem' }}>↳</span>}
+                        {!cat.is_system && <Edit3 size={12} style={{ opacity: 0.5, marginLeft: '0.25rem' }}/>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
@@ -306,6 +331,21 @@ export default function SettingsPage() {
                     <div className="form-row">
                       <div className="form-group"><label>Ícone</label><input value={newCat.icon} onChange={e => setNewCat({ ...newCat, icon: e.target.value })} maxLength={2} /></div>
                       <div className="form-group"><label>Tipo</label><select value={newCat.type} onChange={e => setNewCat({ ...newCat, type: e.target.value })}><option value="expense">Despesa</option><option value="income">Receita</option><option value="both">Ambos</option></select></div>
+                    </div>
+                    <div className="form-group">
+                      <label>Relacionamento</label>
+                      <select 
+                        value={newCat.parent_id || ''} 
+                        onChange={e => {
+                          const parent = categories.find(c => c.id === e.target.value);
+                          setNewCat({ ...newCat, parent_id: e.target.value, group_name: parent ? parent.group_name : '', nature: parent ? parent.nature : 'variable' });
+                        }}
+                      >
+                        <option value="">Nenhum (Categoria Principal)</option>
+                        {categories.filter(c => !c.parent_id && (!editingCategory || c.id !== editingCategory.id)).map(p => (
+                          <option key={p.id} value={p.id}>{p.icon} {p.name} ({p.group_name || 'Personalizado'})</option>
+                        ))}
+                      </select>
                     </div>
                     <div className="form-group">
                       <label>Cor de Identificação</label>

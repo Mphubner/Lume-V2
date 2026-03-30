@@ -8,11 +8,7 @@ import {
   TrendingUp, TrendingDown, Sparkles, Download, PiggyBank,
   ArrowUpRight, ArrowDownRight, BarChart3, Activity, Target, Scale
 } from 'lucide-react';
-import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend, AreaChart, Area, PieChart, Pie, Cell,
-  RadialBarChart, RadialBar
-} from 'recharts';
+import Chart from 'react-apexcharts';
 
 const CATEGORY_COLORS = ['#d4a843', '#8b5cf6', '#22c55e', '#f43f5e', '#3b82f6', '#f59e0b', '#ec4899', '#06b6d4', '#64748b', '#f97316'];
 
@@ -199,28 +195,30 @@ export default function AnalyticsPage() {
           {evolution.length > 0 ? (
             <div className="card">
               <div className="card-header"><h3 className="card-title"><Activity size={18} style={{ color: 'var(--accent-gold)' }} /> Evolução Mensal — Receitas vs Despesas</h3></div>
-              <ResponsiveContainer width="100%" height={320}>
-                <AreaChart data={evolution}>
-                  <defs>
-                    <linearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="expenseGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                  <XAxis dataKey="monthLabel" stroke="var(--text-muted)" fontSize={12} />
-                  <YAxis stroke="var(--text-muted)" fontSize={12} tickFormatter={v => `${(v/1000).toFixed(0)}k`} />
-                  <Tooltip contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 8, color: '#fff' }} formatter={v => formatCurrency(v)} />
-                  <Legend formatter={v => v === 'income' ? '🟢 Receitas' : v === 'expenses' ? '🔴 Despesas' : '🟡 Saldo'} />
-                  <Area type="monotone" dataKey="income" stroke="#22c55e" fill="url(#incomeGrad)" strokeWidth={2} />
-                  <Area type="monotone" dataKey="expenses" stroke="#f43f5e" fill="url(#expenseGrad)" strokeWidth={2} />
-                  <Line type="monotone" dataKey="balance" stroke="var(--accent-gold)" strokeWidth={2} strokeDasharray="5 5" dot={false} />
-                </AreaChart>
-              </ResponsiveContainer>
+              <div style={{ height: 320, marginTop: '1rem' }}>
+                <Chart
+                  options={{
+                    chart: { type: 'area', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
+                    theme: { mode: 'dark' },
+                    colors: ['#22c55e', '#f43f5e', '#facc15'],
+                    fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05, stops: [0, 100] } },
+                    dataLabels: { enabled: false },
+                    stroke: { curve: 'smooth', width: [2, 2, 2], dashArray: [0, 0, 5] },
+                    xaxis: { categories: evolution.map(d => d.monthLabel), axisBorder: { show: false }, axisTicks: { show: false }, labels: { style: { colors: '#94a3b8' } } },
+                    yaxis: { labels: { formatter: (val) => formatCurrency(val, true), style: { colors: '#94a3b8' } } },
+                    grid: { borderColor: '#334155', strokeDashArray: 4, xaxis: { lines: { show: true } }, yaxis: { lines: { show: true } } },
+                    legend: { position: 'top', horizontalAlign: 'right', labels: { colors: '#f8fafc' } },
+                    tooltip: { theme: 'dark', y: { formatter: (val) => formatCurrency(val) } }
+                  }}
+                  series={[
+                    { name: 'Receitas', type: 'area', data: evolution.map(d => d.income) },
+                    { name: 'Despesas', type: 'area', data: evolution.map(d => d.expenses) },
+                    { name: 'Saldo', type: 'line', data: evolution.map(d => d.balance) }
+                  ]}
+                  type="area"
+                  height="100%"
+                />
+              </div>
             </div>
           ) : (
             <EmptyPanel icon="📈" title="Sem dados de evolução" desc="Importe seus extratos bancários para visualizar a evolução mensal de receitas e despesas ao longo do tempo." />
@@ -267,17 +265,29 @@ export default function AnalyticsPage() {
               {/* Gráfico Entradas vs Saídas */}
               <div className="card">
                 <div className="card-header"><h3 className="card-title">Entradas e Saídas — Histórico Mensal</h3></div>
-                <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={evolution} barCategoryGap="20%">
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="monthLabel" stroke="var(--text-muted)" fontSize={12} />
-                    <YAxis stroke="var(--text-muted)" fontSize={12} tickFormatter={v => `${(v/1000).toFixed(0)}k`} />
-                    <Tooltip contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 8, color: '#fff' }} formatter={v => formatCurrency(v)} />
-                    <Legend formatter={v => v === 'income' ? '🟢 Receitas' : '🔴 Despesas'} />
-                    <Bar dataKey="income" fill="#22c55e" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="expenses" fill="#f43f5e" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <div style={{ height: 320, marginTop: '1rem' }}>
+                  <Chart
+                    options={{
+                      chart: { type: 'bar', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
+                      theme: { mode: 'dark' },
+                      colors: ['#22c55e', '#f43f5e'],
+                      plotOptions: { bar: { borderRadius: 4, columnWidth: '40%' } },
+                      dataLabels: { enabled: false },
+                      stroke: { show: true, width: 2, colors: ['transparent'] },
+                      xaxis: { categories: evolution.map(d => d.monthLabel), axisBorder: { show: false }, axisTicks: { show: false }, labels: { style: { colors: '#94a3b8' } } },
+                      yaxis: { labels: { formatter: (val) => formatCurrency(val, true), style: { colors: '#94a3b8' } } },
+                      grid: { borderColor: '#334155', strokeDashArray: 4 },
+                      legend: { position: 'top', horizontalAlign: 'right', labels: { colors: '#f8fafc' } },
+                      tooltip: { theme: 'dark', y: { formatter: (val) => formatCurrency(val) } }
+                    }}
+                    series={[
+                      { name: 'Receitas', data: evolution.map(d => d.income) },
+                      { name: 'Despesas', data: evolution.map(d => d.expenses) }
+                    ]}
+                    type="bar"
+                    height="100%"
+                  />
+                </div>
               </div>
             </>
           ) : (
@@ -295,14 +305,24 @@ export default function AnalyticsPage() {
                 {/* Donut Chart */}
                 <div className="card">
                   <div className="card-header"><h3 className="card-title">Distribuição por Categoria</h3></div>
-                  <ResponsiveContainer width="100%" height={280}>
-                    <PieChart>
-                      <Pie data={byCategory.map(c => ({ name: c.name, value: c.total }))} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={3}>
-                        {byCategory.map((c, i) => <Cell key={i} fill={c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length]} />)}
-                      </Pie>
-                      <Tooltip formatter={v => formatCurrency(v)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 8, color: '#fff' }} />
-                    </PieChart>
-                  </ResponsiveContainer>
+                  <div style={{ height: 280, marginTop: '1rem' }}>
+                    <Chart
+                      options={{
+                        chart: { type: 'donut', background: 'transparent', fontFamily: 'inherit' },
+                        theme: { mode: 'dark' },
+                        labels: byCategory.map(c => c.name),
+                        colors: byCategory.map((c, i) => c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length]),
+                        plotOptions: { pie: { donut: { size: '65%', labels: { show: true, name: { show: true }, value: { show: true, formatter: (val) => formatCurrency(val) }, total: { show: true, label: 'Total', formatter: (w) => formatCurrency(w.globals.seriesTotals.reduce((a, b) => a + b, 0)) } } } } },
+                        dataLabels: { enabled: false },
+                        stroke: { show: true, colors: ['#0f172a'], width: 2 },
+                        legend: { show: false },
+                        tooltip: { theme: 'dark', y: { formatter: (val) => formatCurrency(val) } }
+                      }}
+                      series={byCategory.map(c => c.total)}
+                      type="donut"
+                      height="100%"
+                    />
+                  </div>
                 </div>
 
                 {/* Ranking de Categorias */}

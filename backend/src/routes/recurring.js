@@ -7,7 +7,20 @@ router.use(authMiddleware);
 
 router.get('/', async (req, res) => {
   try {
-    const { data, error } = await supabase.from('recurring_bills').select('*, categories(name, icon, color)').eq('user_id', req.user.id).order('due_day');
+    const { workspace } = req.query;
+    let query = supabase.from('recurring_bills').select('*, categories(name, icon, color)').eq('user_id', req.user.id).order('due_day');
+
+    if (workspace === 'personal') {
+      // NOTE: recurring bills don't natively have account_type, but let's assume personal is family_id = null
+      query = query.is('family_id', null);
+    } else if (workspace === 'business') {
+      // Future-proofing if business recurring bills exist
+      query = query.is('family_id', null); // Just a fallback, in standard scoping it's not well-represented for recurring without account_type
+    } else if (workspace === 'family') {
+      query = query.not('family_id', 'is', null);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
 
     const now = new Date();

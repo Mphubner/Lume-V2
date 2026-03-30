@@ -9,7 +9,7 @@ export default function InlineCategorySelect({
   onCategoryCreated 
 }) {
   const [isCreating, setIsCreating] = useState(false);
-  const [newCat, setNewCat] = useState({ name: '', icon: '📦', color: '#6366f1' });
+  const [newCat, setNewCat] = useState({ name: '', icon: '📦', color: '#6366f1', parent_id: '', nature: 'variable', group_name: '' });
   const [loading, setLoading] = useState(false);
 
   // Filter categories by type (show if type matches or if category is 'both')
@@ -19,7 +19,7 @@ export default function InlineCategorySelect({
     const val = e.target.value;
     if (val === 'CREATE_NEW') {
       setIsCreating(true);
-      setNewCat({ ...newCat, name: '' }); 
+      setNewCat({ ...newCat, name: '', parent_id: '', nature: 'variable', group_name: '' }); 
     } else {
       onChange(val);
     }
@@ -33,7 +33,10 @@ export default function InlineCategorySelect({
         name: newCat.name,
         icon: newCat.icon,
         color: newCat.color,
-        type: typeFilter // automatically assign to current context
+        type: typeFilter, // automatically assign to current context
+        nature: newCat.nature,
+        parent_id: newCat.parent_id || null,
+        group_name: newCat.group_name || null
       };
       const created = await api.createCategory(payload);
       
@@ -52,15 +55,40 @@ export default function InlineCategorySelect({
     }
   };
 
+  // Determine options structure
+  const optionNodes = [];
+  const parents = filteredCategories.filter(c => !c.parent_id);
+  const orphans = [];
+
+  parents.forEach(parent => {
+    const children = filteredCategories.filter(c => c.parent_id === parent.id);
+    if (children.length > 0) {
+      optionNodes.push(
+        <optgroup key={parent.id} label={`${parent.icon} ${parent.group_name ? parent.group_name + ' > ' : ''}${parent.name}`}>
+          {children.map(child => (
+            <option key={child.id} value={child.id}>
+              {child.icon} {child.name}
+            </option>
+          ))}
+        </optgroup>
+      );
+    } else {
+      orphans.push(parent);
+    }
+  });
+
   return (
     <>
       <select value={value || ''} onChange={handleSelectChange} required>
         <option value="" disabled>Selecione uma categoria...</option>
-        {filteredCategories.map(c => (
-          <option key={c.id} value={c.id}>
-            {c.icon} {c.name}
-          </option>
-        ))}
+        {optionNodes}
+        {orphans.length > 0 && (
+          <optgroup label="Outras Categorias">
+            {orphans.map(o => (
+              <option key={o.id} value={o.id}>{o.icon} {o.name}</option>
+            ))}
+          </optgroup>
+        )}
         {/* The inline create option */}
         <option value="CREATE_NEW">➕ Criar Nova Categoria...</option>
       </select>
@@ -105,6 +133,22 @@ export default function InlineCategorySelect({
                       autoFocus
                     />
                   </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Relacionamento (Opcional)</label>
+                  <select 
+                    value={newCat.parent_id || ''} 
+                    onChange={e => {
+                      const parent = categories.find(c => c.id === e.target.value);
+                      setNewCat({ ...newCat, parent_id: e.target.value, group_name: parent?.group_name || '', nature: parent?.nature || 'variable' });
+                    }}
+                  >
+                    <option value="">Nenhum (Categoria Principal)</option>
+                    {categories.filter(c => !c.parent_id).map(p => (
+                      <option key={p.id} value={p.id}>{p.icon} {p.name} ({p.group_name || 'Geral'})</option>
+                    ))}
+                  </select>
                 </div>
                 
                 <div className="form-group">

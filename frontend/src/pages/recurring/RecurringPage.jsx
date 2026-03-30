@@ -3,11 +3,13 @@ import api from '../../services/api';
 import StatCard from '../../components/ui/StatCard';
 import InlineCategorySelect from '../../components/ui/InlineCategorySelect';
 import { formatCurrency } from '../../utils/format';
+import { useWorkspace } from '../../context/WorkspaceContext';
 import { Plus, Edit3, Trash2, Receipt, CheckCircle, Clock, AlertTriangle } from 'lucide-react';
 
 const RECURRENCE_LABELS = { weekly: 'Semanal', biweekly: 'Quinzenal', monthly: 'Mensal', quarterly: 'Trimestral', yearly: 'Anual' };
 
 export default function RecurringPage() {
+  const { currentWorkspace } = useWorkspace();
   const [bills, setBills] = useState([]);
   const [stats, setStats] = useState({ totalMonthly: 0, overdue: 0 });
   const [loading, setLoading] = useState(false);
@@ -18,12 +20,14 @@ export default function RecurringPage() {
     name: '', amount: '', due_day: '', category_id: '', recurrence: 'monthly', is_auto_debit: false, description: '', adjust_to_business_day: true, status: 'active',
   });
 
-  useEffect(() => { loadBills(); loadCategories(); }, []);
+  useEffect(() => { loadBills(); loadCategories(); }, [currentWorkspace]);
 
   const loadBills = async () => {
     setLoading(true);
     try {
-      const result = await api.getRecurringBills();
+      const params = {};
+      if (currentWorkspace !== 'all') params.workspace = currentWorkspace;
+      const result = await api.getRecurringBills(params);
       setBills(result.bills || []);
       setStats(result.stats || stats);
     } catch {

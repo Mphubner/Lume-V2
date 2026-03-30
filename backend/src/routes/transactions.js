@@ -7,10 +7,10 @@ import { supabase } from '../config/supabase.js';
 const router = Router();
 router.use(authMiddleware);
 
-// GET /api/transactions?month=&year=&type=&category=&account=&member=&search=&page=&limit=
+// GET /api/transactions?month=&year=&type=&category=&account=&member=&search=&page=&limit=&workspace=
 router.get('/', async (req, res) => {
   try {
-    const { month, year, type, category_id, account_id, member_id, search, import_id, page = 1, limit = 100, sort = 'date', order = 'desc' } = req.query;
+    const { month, year, type, category_id, account_id, member_id, search, import_id, workspace, page = 1, limit = 100, sort = 'date', order = 'desc' } = req.query;
     
     let query = supabase
       .from('transactions')
@@ -30,6 +30,14 @@ router.get('/', async (req, res) => {
     if (import_id) query = query.eq('import_id', import_id); // Filtro do modal de conferência
     if (search) query = query.ilike('description', `%${search}%`);
 
+    if (workspace === 'personal') {
+      query = query.eq('account_type', 'personal').is('family_id', null);
+    } else if (workspace === 'business') {
+      query = query.eq('account_type', 'business').is('family_id', null);
+    } else if (workspace === 'family') {
+      query = query.not('family_id', 'is', null);
+    }
+
     const from = (page - 1) * limit;
     query = query.range(from, from + parseInt(limit) - 1);
 
@@ -43,16 +51,24 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/transactions/summary?month=&year=
+// GET /api/transactions/summary?month=&year=&workspace=
 router.get('/summary', async (req, res) => {
   try {
-    const { month, year } = req.query;
-    let query = supabase.from('transactions').select('amount, type, date, is_internal_transfer, category_id, categories(name, icon, color)').eq('user_id', req.user.id);
+    const { month, year, workspace } = req.query;
+    let query = supabase.from('transactions').select('amount, type, date, is_internal_transfer, category_id, categories(name, icon, color, nature, group_name)').eq('user_id', req.user.id);
 
     if (month && year) {
       const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
       const endDate = new Date(year, month, 0).toISOString().split('T')[0];
       query = query.gte('date', startDate).lte('date', endDate);
+    }
+
+    if (workspace === 'personal') {
+      query = query.eq('account_type', 'personal').is('family_id', null);
+    } else if (workspace === 'business') {
+      query = query.eq('account_type', 'business').is('family_id', null);
+    } else if (workspace === 'family') {
+      query = query.not('family_id', 'is', null);
     }
 
     const { data, error } = await query;

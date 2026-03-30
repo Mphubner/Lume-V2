@@ -11,9 +11,11 @@ import BottomSheet from '../../components/ui/BottomSheet';
 import { TransactionsSkeleton } from '../../components/ui/Skeleton';
 import InlineCategorySelect from '../../components/ui/InlineCategorySelect';
 import { formatCurrency, formatDate, getMonthName } from '../../utils/format';
+import { useWorkspace } from '../../context/WorkspaceContext';
 import { Plus, Search, ArrowLeftRight, ChevronLeft, ChevronRight, RefreshCw, Filter } from 'lucide-react';
 
 export default function TransactionsPage() {
+  const { currentWorkspace } = useWorkspace();
   const [activeTab, setActiveTab] = useState('monthly');
   const [transactions, setTransactions] = useState([]);
   const [summary, setSummary] = useState({ income: 0, expenses: 0, balance: 0, byCategory: [] });
@@ -32,7 +34,7 @@ export default function TransactionsPage() {
   useEffect(() => {
     loadData();
     loadCategories();
-  }, [activeTab, month, year, page]); // Removed 'search' so we can trigger it explicitly or debounce, but leaving it simple for now, we'll fetch on Enter key or button if needed. Or keep search, let's keep search but handle local state carefully.
+  }, [activeTab, month, year, page, currentWorkspace]); // Reload on workspace change
 
   // Fetch when search changes (debounce via useQuery would be better, but doing simple here)
   useEffect(() => {
@@ -45,17 +47,20 @@ export default function TransactionsPage() {
   const loadData = async () => {
     setLoading(true);
     try {
+      const params = {};
+      if (currentWorkspace !== 'all') params.workspace = currentWorkspace;
+
       if (activeTab === 'monthly') {
         const [txResult, sumResult] = await Promise.all([
-          api.getTransactions({ month, year, page, limit: 100 }),
-          api.getTransactionSummary({ month, year }),
+          api.getTransactions({ month, year, page, limit: 100, ...params }),
+          api.getTransactionSummary({ month, year, ...params }),
         ]);
         setTransactions(txResult.transactions || []);
         setSummary(sumResult);
         setTotal(txResult.total || 0);
         setTotalPages(txResult.totalPages || 1);
       } else {
-        const result = await api.getTransactions({ page, limit: 100, search: search || undefined });
+        const result = await api.getTransactions({ page, limit: 100, search: search || undefined, ...params });
         setTransactions(result.transactions || []);
         setTotal(result.total || 0);
         setTotalPages(result.totalPages || 1);
