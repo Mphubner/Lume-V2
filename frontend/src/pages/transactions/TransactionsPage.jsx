@@ -9,6 +9,7 @@ import api from '../../services/api';
 import StatCard from '../../components/ui/StatCard';
 import BottomSheet from '../../components/ui/BottomSheet';
 import { TransactionsSkeleton } from '../../components/ui/Skeleton';
+import InlineCategorySelect from '../../components/ui/InlineCategorySelect';
 import { formatCurrency, formatDate, getMonthName } from '../../utils/format';
 import { Plus, Search, ArrowLeftRight, ChevronLeft, ChevronRight, RefreshCw, Filter } from 'lucide-react';
 
@@ -26,9 +27,11 @@ export default function TransactionsPage() {
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ description: '', amount: '', type: 'expense', date: new Date().toISOString().split('T')[0], category_id: '', account_type: 'personal' });
   const [sorting, setSorting] = useState([]);
+  const [categories, setCategories] = useState([]);
 
   useEffect(() => {
     loadData();
+    loadCategories();
   }, [activeTab, month, year, page]); // Removed 'search' so we can trigger it explicitly or debounce, but leaving it simple for now, we'll fetch on Enter key or button if needed. Or keep search, let's keep search but handle local state carefully.
 
   // Fetch when search changes (debounce via useQuery would be better, but doing simple here)
@@ -68,6 +71,15 @@ export default function TransactionsPage() {
       setSummary({ income: 3829, expenses: 49, balance: 3779, byCategory: [{ name: 'Outros', total: 49 }] });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadCategories = async () => {
+    try {
+      const cats = await api.getCategories();
+      setCategories(cats || []);
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -299,7 +311,7 @@ export default function TransactionsPage() {
               </div>
               <div className="form-group">
                 <label>Tipo</label>
-                <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+                <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value, category_id: '' })}>
                   <option value="income">Receita</option>
                   <option value="expense">Despesa</option>
                   <option value="transfer">Transferência</option>
@@ -307,9 +319,21 @@ export default function TransactionsPage() {
               </div>
             </div>
             
-            <div className="form-group">
-              <label>Descrição *</label>
-              <input type="text" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Ex: Salário, Supermercado..." required />
+            <div className="grid grid-2" style={{ gap: '1rem' }}>
+              <div className="form-group">
+                <label>Descrição *</label>
+                <input type="text" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Ex: Salário, Supermercado..." required />
+              </div>
+              <div className="form-group">
+                <label>Categoria</label>
+                <InlineCategorySelect 
+                  categories={categories}
+                  value={form.category_id}
+                  onChange={(val) => setForm({ ...form, category_id: val })}
+                  typeFilter={form.type}
+                  onCategoryCreated={loadCategories}
+                />
+              </div>
             </div>
 
             <div className="grid grid-2" style={{ gap: '1rem' }}>

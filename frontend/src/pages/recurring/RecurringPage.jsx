@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import StatCard from '../../components/ui/StatCard';
+import InlineCategorySelect from '../../components/ui/InlineCategorySelect';
 import { formatCurrency } from '../../utils/format';
 import { Plus, Edit3, Trash2, Receipt, CheckCircle, Clock, AlertTriangle } from 'lucide-react';
 
@@ -177,12 +178,13 @@ export default function RecurringPage() {
                 <div className="form-row">
                   <div className="form-group">
                     <label>Categoria</label>
-                    <select value={form.category_id} onChange={e => setForm({ ...form, category_id: e.target.value })}>
-                      <option value="">Selecione...</option>
-                      {categories.filter(c => c.type === 'expense' || c.type === 'both').map(c => (
-                        <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
-                      ))}
-                    </select>
+                    <InlineCategorySelect 
+                      categories={categories}
+                      value={form.category_id}
+                      onChange={(val) => setForm({ ...form, category_id: val })}
+                      typeFilter="expense"
+                      onCategoryCreated={loadCategories}
+                    />
                   </div>
                   <div className="form-group">
                     <label>Recorrência</label>

@@ -93,6 +93,8 @@ class ApiService {
   // Categories
   getCategories() { return this.request('/categories'); }
   createCategory(data) { return this.request('/categories', { method: 'POST', body: data }); }
+  updateCategory(id, data) { return this.request(`/categories/${id}`, { method: 'PUT', body: data }); }
+  deleteCategory(id) { return this.request(`/categories/${id}`, { method: 'DELETE' }); }
 
   // Recurring Bills
   getRecurringBills() { return this.request('/recurring'); }

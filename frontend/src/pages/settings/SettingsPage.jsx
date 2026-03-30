@@ -14,8 +14,9 @@ export default function SettingsPage() {
   const [aiRules, setAiRules] = useState([]);
   const [aiStats, setAiStats] = useState({ activeRules: 0, totalApplications: 0, totalRules: 0 });
   const [categories, setCategories] = useState([]);
-  const [newCat, setNewCat] = useState({ name: '', icon: '📦', type: 'expense' });
+  const [newCat, setNewCat] = useState({ name: '', icon: '📦', type: 'expense', color: '#6366f1' });
   const [showCatModal, setShowCatModal] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [accountForm, setAccountForm] = useState({ name: '', type: 'checking', account_type: 'personal', institution: '', balance: '0', credit_limit: '', closing_day: '', due_day: '', color: '#d4a843', icon: '🏦' });
@@ -137,9 +138,47 @@ export default function SettingsPage() {
     try { await api.updateAIRule(rule.id, { is_active: !rule.is_active }); loadAIRules(); } catch {}
   };
 
-  const createCategory = async (e) => {
+  const saveCategory = async (e) => {
     e.preventDefault();
-    try { await api.createCategory(newCat); setShowCatModal(false); setNewCat({ name: '', icon: '📦', type: 'expense' }); loadCategories(); } catch (err) { alert('Erro: ' + err.message); }
+    try { 
+      if (editingCategory) {
+        await api.updateCategory(editingCategory.id, newCat);
+      } else {
+        await api.createCategory(newCat); 
+      }
+      setShowCatModal(false); 
+      setNewCat({ name: '', icon: '📦', type: 'expense', color: '#6366f1' }); 
+      setEditingCategory(null);
+      loadCategories(); 
+    } catch (err) { alert('Erro: ' + err.message); }
+  };
+
+  const deleteCategory = async () => {
+    if (!confirm('Tem certeza que deseja excluir esta categoria? Deletar categorias pode remover a relação visual de transações antigas.')) return;
+    try {
+      await api.deleteCategory(editingCategory.id);
+      setShowCatModal(false);
+      setEditingCategory(null);
+      loadCategories();
+    } catch (err) {
+      alert('Erro ao excluir: ' + err.message);
+    }
+  };
+
+  const openNewCategory = () => {
+    setEditingCategory(null);
+    setNewCat({ name: '', icon: '📦', type: 'expense', color: '#6366f1' });
+    setShowCatModal(true);
+  };
+
+  const openEditCategory = (cat) => {
+    if (cat.is_system) {
+       alert("Categorias do sistema não podem ser editadas para preservar a inteligência da plataforma.");
+       return;
+    }
+    setEditingCategory(cat);
+    setNewCat({ name: cat.name, icon: cat.icon || '📦', type: cat.type || 'expense', color: cat.color || '#6366f1' });
+    setShowCatModal(true);
   };
 
   const createAccount = async (e) => {
@@ -216,14 +255,19 @@ export default function SettingsPage() {
           <div className="card">
             <div className="card-header">
               <h3 className="card-title">📦 Categorias</h3>
-              <button className="btn btn-primary btn-sm" onClick={() => setShowCatModal(true)}><Plus size={14} /> Nova Categoria</button>
+              <button className="btn btn-primary btn-sm" onClick={openNewCategory}><Plus size={14} /> Nova Categoria</button>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
               {categories.map(cat => (
-                <span key={cat.id} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.375rem', padding: '0.375rem 0.75rem', borderRadius: 'var(--border-radius-full)', background: 'var(--bg-secondary)', fontSize: '0.85rem', border: `1px solid ${cat.color || 'var(--border-color)'}` }}>
+                <button 
+                  key={cat.id} 
+                  onClick={() => openEditCategory(cat)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.375rem', padding: '0.375rem 0.75rem', borderRadius: 'var(--border-radius-full)', background: 'var(--bg-secondary)', fontSize: '0.85rem', border: `1px solid ${cat.color || 'var(--border-color)'}`, cursor: 'pointer' }}
+                >
                   {cat.icon} {cat.name}
                   {cat.is_system && <span className="badge badge-info" style={{ padding: '0 0.25rem', fontSize: '0.6rem' }}>sistema</span>}
-                </span>
+                  {!cat.is_system && <Edit3 size={12} style={{ opacity: 0.5, marginLeft: '0.25rem' }}/>}
+                </button>
               ))}
             </div>
           </div>
@@ -255,13 +299,40 @@ export default function SettingsPage() {
           {showCatModal && (
             <div className="modal-overlay" onClick={() => setShowCatModal(false)}>
               <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 400 }}>
-                <div className="modal-header"><h2>📦 Nova Categoria</h2><button onClick={() => setShowCatModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button></div>
-                <form onSubmit={createCategory}>
+                <div className="modal-header"><h2>{editingCategory ? '✏️ Editar Categoria' : '📦 Nova Categoria'}</h2><button onClick={() => setShowCatModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button></div>
+                <form onSubmit={saveCategory}>
                   <div className="modal-body">
                     <div className="form-group"><label>Nome</label><input value={newCat.name} onChange={e => setNewCat({ ...newCat, name: e.target.value })} required /></div>
-                    <div className="form-row"><div className="form-group"><label>Ícone</label><input value={newCat.icon} onChange={e => setNewCat({ ...newCat, icon: e.target.value })} /></div><div className="form-group"><label>Tipo</label><select value={newCat.type} onChange={e => setNewCat({ ...newCat, type: e.target.value })}><option value="expense">Despesa</option><option value="income">Receita</option><option value="both">Ambos</option></select></div></div>
+                    <div className="form-row">
+                      <div className="form-group"><label>Ícone</label><input value={newCat.icon} onChange={e => setNewCat({ ...newCat, icon: e.target.value })} maxLength={2} /></div>
+                      <div className="form-group"><label>Tipo</label><select value={newCat.type} onChange={e => setNewCat({ ...newCat, type: e.target.value })}><option value="expense">Despesa</option><option value="income">Receita</option><option value="both">Ambos</option></select></div>
+                    </div>
+                    <div className="form-group">
+                      <label>Cor de Identificação</label>
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        {['#f43f5e', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#64748b'].map(color => (
+                          <button
+                            key={color}
+                            type="button"
+                            onClick={() => setNewCat({ ...newCat, color })}
+                            style={{
+                              width: 24, height: 24, borderRadius: '50%', background: color, border: 'none', cursor: 'pointer',
+                              boxShadow: newCat.color === color ? `0 0 0 2px var(--bg-card), 0 0 0 4px ${color}` : 'none',
+                              transition: 'all 0.2s'
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                  <div className="modal-footer"><button type="button" className="btn btn-secondary" onClick={() => setShowCatModal(false)}>Cancelar</button><button type="submit" className="btn btn-primary">💾 Salvar</button></div>
+                  <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    {editingCategory && !editingCategory.is_system ? (
+                      <button type="button" className="btn btn-secondary" style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)' }} onClick={deleteCategory}><Trash2 size={16}/></button>
+                    ) : <div />}
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button type="button" className="btn btn-secondary" onClick={() => setShowCatModal(false)}>Cancelar</button><button type="submit" className="btn btn-primary">💾 Salvar</button>
+                    </div>
+                  </div>
                 </form>
               </div>
             </div>
