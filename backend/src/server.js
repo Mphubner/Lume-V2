@@ -21,6 +21,7 @@ import paymentsRouter from './routes/payments.js';
 import notificationsRouter from './routes/notifications.js';
 import pluggyRouter from './routes/pluggy.js';
 import familyRouter from './routes/family.js';
+import reserveRouter from './routes/reserve.js';
 dotenv.config();
 
 const app = express();
@@ -83,6 +84,7 @@ app.use('/api/payments', paymentsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/pluggy', pluggyRouter);
 app.use('/api/family', familyRouter);
+app.use('/api/reserve', reserveRouter);
 
 // Error handler
 app.use((err, req, res, next) => {

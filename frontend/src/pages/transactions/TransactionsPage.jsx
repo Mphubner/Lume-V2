@@ -9,6 +9,7 @@ import {
 import api from '../../services/api';
 import StatCard from '../../components/ui/StatCard';
 import BottomSheet from '../../components/ui/BottomSheet';
+import TransactionEditModal from './TransactionEditModal';
 import { TransactionsSkeleton } from '../../components/ui/Skeleton';
 import InlineCategorySelect from '../../components/ui/InlineCategorySelect';
 import { formatCurrency, formatDate, getMonthName } from '../../utils/format';
@@ -35,10 +36,13 @@ export default function TransactionsPage() {
   const [form, setForm] = useState({ description: '', amount: '', type: 'expense', date: new Date().toISOString().split('T')[0], category_id: '', account_type: 'personal' });
   const [sorting, setSorting] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [editingTx, setEditingTx] = useState(null);
+  const [accounts, setAccounts] = useState([]);
+  const [family, setFamily] = useState([]);
 
   useEffect(() => {
     loadData();
-    loadCategories();
+    loadDropdownParams();
   }, [activeTab, month, year, page, currentWorkspace]); // Reload on workspace change
 
   // Fetch when search changes (debounce via useQuery would be better, but doing simple here)
@@ -85,10 +89,16 @@ export default function TransactionsPage() {
     }
   };
 
-  const loadCategories = async () => {
+  const loadDropdownParams = async () => {
     try {
-      const cats = await api.getCategories();
+      const [cats, accs, fam] = await Promise.all([
+        api.getCategories(),
+        api.getAccounts(),
+        api.getFamily()
+      ]);
       setCategories(cats || []);
+      setAccounts(accs || []);
+      setFamily(fam?.members || []);
     } catch (err) {
       console.error(err);
     }
@@ -229,10 +239,9 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {/* Transaction List */}
-      <div className="card">
+      <div className="card" style={{ maxWidth: '100%', overflow: 'hidden' }}>
         {activeTab === 'all' && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
             <strong style={{ fontSize: '0.9rem' }}>{total} transações encontradas</strong>
             <div className="pagination" style={{ padding: 0 }}>
               <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>‹</button>
@@ -250,8 +259,10 @@ export default function TransactionsPage() {
           <div className="empty-state">
             <div className="empty-state-icon">💰</div>
             <h3>Nenhuma transação encontrada</h3>
-            <p>Adicione sua primeira transação ou importe um extrato bancário</p>
-            <button className="btn btn-primary" onClick={() => setShowModal(true)}><Plus size={16} /> Nova Transação</button>
+            <p style={{ maxWidth: '100%' }}>Adicione sua primeira transação ou importe um extrato bancário</p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'center' }}>
+              <button className="btn btn-primary" onClick={() => setShowModal(true)}><Plus size={16} /> Nova Transação</button>
+            </div>
           </div>
         ) : activeTab === 'all' ? (
           <div className="table-responsive" style={{ overflowX: 'auto' }}>
@@ -293,7 +304,7 @@ export default function TransactionsPage() {
                   {formatDate(date)}
                 </div>
                 {txs.map(tx => (
-                  <div key={tx.id} className="transaction-item">
+                  <div key={tx.id} className="transaction-item" onClick={() => setEditingTx(tx)} style={{ cursor: 'pointer' }}>
                     <div className={`transaction-dot ${tx.type}`} />
                     <div className="transaction-info">
                       <div className="transaction-desc">{tx.description}</div>
@@ -342,7 +353,7 @@ export default function TransactionsPage() {
                   value={form.category_id}
                   onChange={(val) => setForm({ ...form, category_id: val })}
                   typeFilter={form.type}
-                  onCategoryCreated={loadCategories}
+                  onCategoryCreated={loadDropdownParams}
                 />
               </div>
             </div>
@@ -363,11 +374,35 @@ export default function TransactionsPage() {
             
             <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
               <button type="button" className="btn btn-secondary flex-1" onClick={() => setShowModal(false)}>Cancelar</button>
-              <button type="submit" className="btn btn-primary flex-1">Salvar</button>
+              <button type="submit" className="btn btn-primary flex-1" disabled={loading}>{loading ? 'Salvando...' : 'Salvar'}</button>
             </div>
           </div>
         </form>
       </BottomSheet>
+
+      <TransactionEditModal
+        isOpen={!!editingTx}
+        onClose={() => setEditingTx(null)}
+        transaction={editingTx}
+        categories={categories}
+        accounts={accounts}
+        family={family}
+        onSave={async (id, data) => {
+          try {
+            await api.updateTransaction(id, data);
+            setEditingTx(null);
+            loadData();
+          } catch (err) { alert('Erro ao salvar: ' + err.message); }
+        }}
+        onDelete={async (id) => {
+          try {
+            await api.deleteTransaction(id);
+            setEditingTx(null);
+            loadData();
+          } catch (err) { alert('Erro ao excluir: ' + err.message); }
+        }}
+        onCategoryCreated={loadDropdownParams}
+      />
     </div>
   );
 }

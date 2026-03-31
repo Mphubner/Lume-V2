@@ -20,11 +20,9 @@ export default function ReservePage() {
   const loadReserve = async () => {
     setLoading(true);
     try {
-      const result = await api.request('/health');
-      if (result?.latest) {
-        // Fallback
-      }
-    } catch {}
+      const result = await api.getReserve();
+      if (result) setReserve(result);
+    } catch (err) { console.error('Error loading reserve', err); }
     setLoading(false);
   };
 
@@ -40,19 +38,30 @@ export default function ReservePage() {
     const val = parseFloat(amount);
     if (!val || val <= 0) return;
     const newAmount = action === 'add' ? reserve.current_amount + val : Math.max(0, reserve.current_amount - val);
-    setReserve({ ...reserve, current_amount: newAmount });
-    setAction(null);
-    setAmount('');
+    
+    try {
+      setLoading(true);
+      const updated = await api.updateReserve({ ...reserve, current_amount: newAmount });
+      setReserve(updated);
+      setAction(null);
+      setAmount('');
+    } catch (err) { alert('Erro ao registrar valor: ' + err.message); }
+    finally { setLoading(false); }
   };
 
   const handleSetTarget = async (e) => {
     e.preventDefault();
-    setReserve({
-      ...reserve,
-      target_amount: parseFloat(targetForm.target_amount) || reserve.target_amount,
-      monthly_income: parseFloat(targetForm.monthly_income) || reserve.monthly_income,
-    });
-    setShowTarget(false);
+    try {
+      setLoading(true);
+      const updated = await api.updateReserve({
+        ...reserve,
+        target_amount: parseFloat(targetForm.target_amount) || reserve.target_amount,
+        monthly_income: parseFloat(targetForm.monthly_income) || reserve.monthly_income,
+      });
+      setReserve(updated);
+      setShowTarget(false);
+    } catch (err) { alert('Erro ao salvar meta: ' + err.message); }
+    finally { setLoading(false); }
   };
 
   return (

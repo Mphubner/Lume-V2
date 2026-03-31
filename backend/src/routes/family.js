@@ -92,7 +92,7 @@ router.get('/', authMiddleware, async (req, res) => {
 // =========================================
 router.post('/entity', authMiddleware, async (req, res) => {
   try {
-    const { name, type = 'business' } = req.body;
+    const { name, type = 'business', members = [] } = req.body;
     const userId = req.user.id;
 
     if (!name || !name.trim()) {
@@ -108,11 +108,20 @@ router.post('/entity', authMiddleware, async (req, res) => {
     if (error) throw error;
 
     // Add the owner as a member
-    await supabase.from('family_members').insert({
-      family_id: entity.id,
-      user_id: userId,
-      role: 'owner',
-    });
+    const newMembers = [
+      { family_id: entity.id, user_id: userId, role: 'owner' }
+    ];
+
+    // If other user IDs were provided to have access
+    if (members && Array.isArray(members)) {
+      for (const mId of members) {
+        if (mId !== userId) {
+          newMembers.push({ family_id: entity.id, user_id: mId, role: 'member' });
+        }
+      }
+    }
+
+    await supabase.from('family_members').insert(newMembers);
 
     res.json({ success: true, entity });
   } catch (error) {

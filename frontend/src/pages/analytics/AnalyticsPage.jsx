@@ -72,7 +72,7 @@ export default function AnalyticsPage() {
     <div className="card" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
       <div style={{ fontSize: '3rem', marginBottom: '1rem', opacity: 0.5 }}>{icon}</div>
       <h3 style={{ fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>{title}</h3>
-      <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: 400, margin: '0 auto' }}>{desc}</p>
+      <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: '100%', margin: '0 auto' }}>{desc}</p>
     </div>
   );
 

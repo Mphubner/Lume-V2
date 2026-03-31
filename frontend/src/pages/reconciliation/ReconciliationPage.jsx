@@ -48,7 +48,7 @@ export default function ReconciliationPage() {
     try {
       await api.reconcileTransaction(id, { approved: true });
       setPending(prev => prev.filter(t => t.id !== id));
-    } catch { /* keep in list on error */ }
+    } catch (err) { alert(`Erro: ${err.message}`); }
     finally { setProcessing(p => ({ ...p, [id]: false })); }
   };
 
@@ -60,7 +60,7 @@ export default function ReconciliationPage() {
       await api.reconcileTransaction(id, { category_id: editCatId, approved: true });
       setPending(prev => prev.filter(t => t.id !== id));
       setEditingId(null);
-    } catch { }
+    } catch (err) { alert(`Erro: ${err.message}`); }
     finally { setProcessing(p => ({ ...p, [id]: false })); }
   };
 
@@ -69,8 +69,9 @@ export default function ReconciliationPage() {
     setLoading(true);
     try {
       await api.reconcileAll();
-      setPending([]);
-    } finally { setLoading(false); }
+      load(); // Reload to refresh both pending and history stats
+    } catch (err) { alert(`Erro ao aprovar: ${err.message}`); }
+    finally { setLoading(false); }
   };
 
   // ── Computed ──────────────────────────────────────────────────────────────
@@ -291,35 +292,37 @@ export default function ReconciliationPage() {
             <div className="card-header">
               <h3 className="card-title">📋 Histórico de Importações</h3>
             </div>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Arquivo</th><th>Conta</th><th>Total</th><th>Importadas</th><th>Duplicatas</th><th>Status</th><th>Data</th>
-                </tr>
-              </thead>
-              <tbody>
-                {imports.map(imp => (
-                  <tr key={imp.id}>
-                    <td>
-                      <div style={{ fontWeight: 500, fontSize: '0.85rem' }}>{imp.filename}</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{imp.file_type?.toUpperCase()}</div>
-                    </td>
-                    <td>{imp.accounts?.name || '-'}</td>
-                    <td style={{ fontWeight: 600 }}>{imp.total_transactions}</td>
-                    <td style={{ color: 'var(--color-success)', fontWeight: 600 }}>{imp.imported_transactions}</td>
-                    <td style={{ color: imp.duplicates_skipped > 0 ? 'var(--color-warning)' : 'var(--text-muted)' }}>{imp.duplicates_skipped}</td>
-                    <td>
-                      <span className={`badge ${imp.status === 'completed' ? 'badge-success' : imp.status === 'processing' ? 'badge-warning' : 'badge-danger'}`}>
-                        {imp.status === 'completed' ? '✅ Concluída' : imp.status === 'processing' ? '⏳ Processando' : '❌ Falhou'}
-                      </span>
-                    </td>
-                    <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      {imp.created_at ? new Date(imp.created_at).toLocaleDateString('pt-BR') : '-'}
-                    </td>
+            <div className="table-responsive">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th style={{ minWidth: 200 }}>Arquivo</th><th>Conta</th><th>Total</th><th>Importadas</th><th>Duplicatas</th><th>Status</th><th style={{ minWidth: 100 }}>Data</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {imports.map(imp => (
+                    <tr key={imp.id}>
+                      <td>
+                        <div style={{ fontWeight: 500, fontSize: '0.85rem', whiteSpace: 'normal', wordBreak: 'break-all' }}>{imp.filename}</div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{imp.file_type?.toUpperCase()}</div>
+                      </td>
+                      <td>{imp.accounts?.name || '-'}</td>
+                      <td style={{ fontWeight: 600 }}>{imp.total_transactions}</td>
+                      <td style={{ color: 'var(--color-success)', fontWeight: 600 }}>{imp.imported_transactions}</td>
+                      <td style={{ color: imp.duplicates_skipped > 0 ? 'var(--color-warning)' : 'var(--text-muted)' }}>{imp.duplicates_skipped}</td>
+                      <td>
+                        <span className={`badge ${imp.status === 'completed' ? 'badge-success' : imp.status === 'processing' ? 'badge-warning' : 'badge-danger'}`}>
+                          {imp.status === 'completed' ? '✅ Concluída' : imp.status === 'processing' ? '⏳ Processando' : '❌ Falhou'}
+                        </span>
+                      </td>
+                      <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        {imp.created_at ? new Date(imp.created_at).toLocaleDateString('pt-BR') : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )
       )}

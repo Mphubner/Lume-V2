@@ -1827,6 +1827,16 @@ input:focus:not(:focus-visible) {
 
   /* Chat button mobile positioning */
   .chat-fab { bottom: 1rem !important; right: 1rem !important; width: 48px !important; height: 48px !important; }
+
+  /* Table and wide lists responsiveness */
+  .table-responsive {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+    border-radius: var(--border-radius-sm);
+  }
 }
 
 /* ---- Very Small Phones (< 375px) ---- */

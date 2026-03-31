@@ -28,8 +28,8 @@ export default function InvestmentsPage() {
     <div className="card" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
       <div style={{ fontSize: '3rem', marginBottom: '1rem', opacity: 0.5 }}>{icon}</div>
       <h3 style={{ fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>{title}</h3>
-      <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: 420, margin: '0 auto 1.5rem' }}>{desc}</p>
-      <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+      <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: '100%', margin: '0 auto 1.5rem' }}>{desc}</p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', justifyContent: 'center' }}>
         <button className="btn btn-primary" onClick={() => setShowModal(true)}><Plus size={16} /> Adicionar Investimento</button>
         <button className="btn btn-secondary" onClick={() => navigate('/importar')}><Upload size={16} /> Importar Carteira</button>
       </div>

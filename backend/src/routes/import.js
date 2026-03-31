@@ -11,7 +11,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 router.use(authMiddleware);
 
 // Processamento Assíncrono da Fila
-async function processImportBackground(user, fileBuffer, fileType, importRecordId, accountId) {
+async function processImportBackground(user, fileBuffer, fileType, importRecordId, accountId, memberId) {
   try {
     let rawTransactions = [];
     let discoveredTitular = null;
@@ -101,6 +101,7 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
       await supabase.from('transactions').insert({
         user_id: user.id,
         account_id: accountId,
+        member_id: memberId,
         category_id: categoryId,
         description: raw.description,
         raw_description: raw.description,
@@ -136,7 +137,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
 
-    const { account_id } = req.body;
+    const { account_id, member_id } = req.body;
     const fileType = req.file.originalname.split('.').pop().toLowerCase();
 
     if (!['csv', 'ofx', 'xlsx', 'pdf'].includes(fileType)) {
@@ -155,7 +156,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     if (error) throw error;
 
     // Fire and Forget (Lança o processo pesado em background no event loop e NÃO aguarda)
-    processImportBackground(req.user, req.file.buffer, fileType, importRecord.id, account_id);
+    processImportBackground(req.user, req.file.buffer, fileType, importRecord.id, account_id, member_id);
 
     // Responde instantaneamente
     res.status(202).json({

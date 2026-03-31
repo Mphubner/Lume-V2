@@ -14,6 +14,10 @@ export default function ImportPage() {
   const [history, setHistory] = useState([]);
   const [isPolling, setIsPolling] = useState(false);
   const [auditImportId, setAuditImportId] = useState(null);
+  const [accounts, setAccounts] = useState([]);
+  const [family, setFamily] = useState([]);
+  const [accountId, setAccountId] = useState('');
+  const [memberId, setMemberId] = useState('');
 
   const fetchHistory = async () => {
     try {
@@ -26,8 +30,17 @@ export default function ImportPage() {
     }
   };
 
+  const fetchDropdowns = async () => {
+    try {
+      const [accs, fam] = await Promise.all([ api.getAccounts(), api.getFamily() ]);
+      setAccounts(accs);
+      setFamily(fam);
+    } catch (e) { console.error(e); }
+  };
+
   useEffect(() => {
     fetchHistory();
+    fetchDropdowns();
   }, []);
 
   useEffect(() => {
@@ -49,7 +62,22 @@ export default function ImportPage() {
     if (!file) return;
     setUploading(true);
     try {
-      await api.uploadFile(file, accountName || null);
+      let finalAccountId = accountId;
+      
+      // Criar nova conta dinamicamente se escolheu a opção
+      if (accountId === 'new' && accountName.trim()) {
+        const newAcc = await api.createAccount({
+          name: accountName.trim(),
+          type: 'checking',
+          institution: 'Banco Padrão',
+          balance: 0
+        });
+        finalAccountId = newAcc.id;
+        setAccountId(newAcc.id);
+        fetchDropdowns(); // Recarrega as contas
+      }
+      
+      await api.uploadFile(file, finalAccountId || null, memberId || null);
       setFile(null); // Limpa o estado e libera a UI
       fetchHistory(); // Chama o history para ver o novo estado processing
     } catch (err) {
@@ -102,15 +130,27 @@ export default function ImportPage() {
               </div>
             </div>
 
-            <div style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Nome da Conta (Opcional)</label>
-              <input 
-                type="text" 
-                placeholder="Ex: Nubank da Jade, Itaú Empresa..." 
-                value={accountName} 
-                onChange={e => setAccountName(e.target.value)} 
-                style={{ width: '100%', marginBottom: '1rem' }}
-              />
+            <div className="grid grid-2" style={{ marginBottom: '1.5rem', gap: '1rem', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Atribuir a Conta</label>
+                <select value={accountId} onChange={e => setAccountId(e.target.value)} style={{ width: '100%', marginBottom: accountId === 'new' ? '0.5rem' : 0 }}>
+                  <option value="">Automático / Desconhecida</option>
+                  <optgroup label="Minhas Contas">
+                    {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.institution})</option>)}
+                  </optgroup>
+                  <option value="new">+ Cadastrar Nova Conta Agora</option>
+                </select>
+                {accountId === 'new' && (
+                  <input type="text" placeholder="Nome rápido para a conta..." value={accountName} onChange={e => setAccountName(e.target.value)} style={{ width: '100%' }} autoFocus />
+                )}
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Atribuir a Membro</label>
+                <select value={memberId} onChange={e => setMemberId(e.target.value)} style={{ width: '100%' }}>
+                  <option value="">Nenhum (Transação Pessoal)</option>
+                  {family.map(mem => <option key={mem.id} value={mem.id}>{mem.name} — {mem.role}</option>)}
+                </select>
+              </div>
             </div>
 
             <div

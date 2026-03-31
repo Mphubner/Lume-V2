@@ -26,7 +26,7 @@ export default function SettingsPage() {
   const [showFamilyModal, setShowFamilyModal] = useState(false);
   const [familyForm, setFamilyForm] = useState({ name: '', email: '', password: '', role: 'member', entity_id: '' });
   const [showEntityModal, setShowEntityModal] = useState(false);
-  const [entityForm, setEntityForm] = useState({ name: '' });
+  const [entityForm, setEntityForm] = useState({ name: '', members: [] });
 
   const isGrantedMember = profile?.plan_status === 'granted';
 
@@ -106,9 +106,9 @@ export default function SettingsPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.createEntity({ name: entityForm.name, type: 'business' });
+      await api.createEntity({ name: entityForm.name, type: 'business', members: entityForm.members || [] });
       setShowEntityModal(false);
-      setEntityForm({ name: '' });
+      setEntityForm({ name: '', members: [] });
       alert('Empresa cadastrada com sucesso!');
       loadFamily();
     } catch (err) {
@@ -204,7 +204,7 @@ export default function SettingsPage() {
     { key: 'profile', label: '👤 Perfil' },
     { key: 'preferences', label: '⚙️ Contas e Categorias' },
     ...(!isGrantedMember ? [{ key: 'subscription', label: '💳 Assinatura' }] : []),
-    { key: 'family', label: '👥 Espaços & Equipe' },
+    { key: 'family', label: '👥 Família & Empresa' },
     { key: 'ai', label: '🤖 IA' },
     { key: 'integrations', label: '🔌 Integrações' },
     { key: 'audit', label: '📋 Auditoria' },
@@ -531,6 +531,29 @@ export default function SettingsPage() {
                   <div className="modal-body">
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>Cadastre uma empresa para separar as finanças PJ das pessoais. Você poderá importar extratos em nome dela e convidar colaboradores.</p>
                     <div className="form-group"><label>Nome da Empresa *</label><input value={entityForm.name} onChange={e => setEntityForm({ ...entityForm, name: e.target.value })} placeholder="Ex: Ateliê, Consultoria ABC..." required /></div>
+                    
+                    {familyData.members.length > 0 && (
+                      <div className="form-group" style={{ marginTop: '1rem' }}>
+                        <label style={{ marginBottom: '0.5rem', display: 'block' }}>Compartilhar acesso com:</label>
+                        <div style={{ display: 'grid', gap: '0.5rem', background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 8 }}>
+                          {familyData.members.map(m => (
+                            <label key={m.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+                              <input 
+                                type="checkbox" 
+                                checked={(entityForm.members || []).includes(m.id)}
+                                onChange={(e) => {
+                                  let newMembers = [...(entityForm.members || [])];
+                                  if (e.target.checked) newMembers.push(m.id);
+                                  else newMembers = newMembers.filter(id => id !== m.id);
+                                  setEntityForm({ ...entityForm, members: newMembers });
+                                }}
+                              />
+                              {m.name || m.email} <span style={{ color: 'var(--text-muted)' }}>— {m.role}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="modal-footer"><button type="button" className="btn btn-secondary" onClick={() => setShowEntityModal(false)}>Cancelar</button><button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Criando...' : 'Cadastrar Empresa'}</button></div>
                 </form>

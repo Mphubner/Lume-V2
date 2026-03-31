@@ -32,7 +32,13 @@ router.get('/', async (req, res) => {
     }
     if (type) query = query.eq('type', type);
     if (uncategorized === 'true') {
-      query = query.is('category_id', null);
+      // Find "Outros" category
+      const { data: catOutros } = await supabase.from('categories').select('id').eq('name', 'Outros').limit(1).maybeSingle();
+      if (catOutros) {
+        query = query.or(`category_id.is.null,category_id.eq.${catOutros.id}`);
+      } else {
+        query = query.is('category_id', null);
+      }
     } else if (category_id) {
       query = query.eq('category_id', category_id);
     }

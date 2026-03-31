@@ -125,6 +125,10 @@ class ApiService {
   getHealthScore() { return this.request('/health'); }
   calculateHealth() { return this.request('/health/calculate', { method: 'POST' }); }
 
+  // Reserve
+  getReserve() { return this.request('/reserve'); }
+  updateReserve(data) { return this.request('/reserve/update', { method: 'POST', body: data }); }
+
   // AI
   getInsights(force = false) { return this.request(`/ai/insights${force ? '?force=true' : ''}`, { method: 'POST' }); }
   chat(message) { return this.request('/ai/chat', { method: 'POST', body: { message } }); }
@@ -132,25 +136,14 @@ class ApiService {
   updateAIRule(id, data) { return this.request(`/ai/rules/${id}`, { method: 'PUT', body: data }); }
   deleteAIRule(id) { return this.request(`/ai/rules/${id}`, { method: 'DELETE' }); }
 
-  // Import
-  async uploadFile(file, accountId) {
-    const formData = new FormData();
-    formData.append('file', file);
-    if (accountId) formData.append('account_id', accountId);
 
-    const response = await fetch(`${API_URL}/import/upload`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${this.token}` },
-      body: formData,
-    });
-    return response.json();
-  }
   getImportHistory() { return this.request('/import/history'); }
 
-  async uploadFile(file, accountId) {
+  async uploadFile(file, accountId, memberId) {
     const formData = new FormData();
     formData.append('file', file);
     if (accountId) formData.append('account_id', accountId);
+    if (memberId) formData.append('member_id', memberId);
 
     const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5001/api'}/import/upload`, {
       method: 'POST',
