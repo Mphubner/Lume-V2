@@ -14,10 +14,7 @@ import {
   Settings, Plus
 } from 'lucide-react';
 import Chart from 'react-apexcharts';
-import {
-  Tooltip, ResponsiveContainer,
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Legend, Area, AreaChart,
-} from 'recharts';
+
 
 const CATEGORY_COLORS = ['#d4a843', '#8b5cf6', '#22c55e', '#f43f5e', '#3b82f6', '#f59e0b', '#ec4899', '#06b6d4', '#64748b', '#f97316'];
 
@@ -272,7 +269,7 @@ export default function DashboardPage() {
               <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
                 Há {formatCurrency(data.byCategory.find(c => c.name === 'Outros')?.total || 0)} em transações sem categoria que podem afetar seu orçamento.
               </p>
-              <button className="btn btn-secondary btn-sm">Ver Transações →</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => window.location.href='/lancamentos?category=uncategorized'}>Ver Transações →</button>
             </div>
           )}
 
@@ -335,22 +332,31 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <ResponsiveContainer width="100%" height={250}>
-              <AreaChart data={data.cashFlowProjection.map(d => ({...d, shortDate: d.date.substring(5, 10).replace('-', '/')}))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                <XAxis dataKey="shortDate" stroke="var(--text-muted)" fontSize={12} minTickGap={20} />
-                <YAxis stroke="var(--text-muted)" fontSize={12} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-                <Tooltip 
-                  contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }} 
-                  formatter={(v, name) => [formatCurrency(v), name === 'projectedBalance' ? 'Saldo Alvo' : name === 'expectedExpense' ? 'Despesas no Dia' : 'Ganhos no Dia']} 
-                />
-                <Legend formatter={(value) => value === 'projectedBalance' ? '🔵 Linha Caixa' : value === 'expectedExpense' ? '🔴 Saída (Contas Fixas)' : '🟢 Entrada (Prevista)'}/>
-                
-                <Area type="stepAfter" dataKey="projectedBalance" stroke="#3b82f6" fill="#3b82f620" strokeWidth={3} />
-                <Line type="monotone" dataKey="expectedExpense" stroke="var(--color-danger)" strokeWidth={0} dot={{ r: 4, fill: 'var(--color-danger)' }} activeDot={{ r: 6 }} />
-                <Line type="monotone" dataKey="expectedIncome" stroke="var(--color-success)" strokeWidth={0} dot={{ r: 4, fill: 'var(--color-success)' }} activeDot={{ r: 6 }} />
-              </AreaChart>
-            </ResponsiveContainer>
+            <div style={{ height: 250, marginTop: '0.5rem' }}>
+              <Chart
+                options={{
+                  chart: { type: 'area', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
+                  theme: { mode: 'dark' },
+                  colors: ['#3b82f6', '#f43f5e', '#22c55e'],
+                  stroke: { curve: 'stepline', width: [3, 0, 0] },
+                  fill: { type: ['gradient', 'solid', 'solid'], gradient: { shadeIntensity: 1, opacityFrom: 0.25, opacityTo: 0.02, stops: [0, 90, 100] } },
+                  dataLabels: { enabled: false },
+                  markers: { size: [0, 4, 4], colors: ['#3b82f6', '#f43f5e', '#22c55e'], hover: { size: 6 } },
+                  xaxis: { categories: data.cashFlowProjection.map(d => d.date.substring(5, 10).replace('-', '/')), labels: { style: { colors: '#94a3b8' }, rotate: -30 }, axisBorder: { show: false }, axisTicks: { show: false }, tickAmount: 8 },
+                  yaxis: { labels: { formatter: v => `${(v/1000).toFixed(0)}k`, style: { colors: '#94a3b8' } } },
+                  grid: { borderColor: '#334155', strokeDashArray: 4 },
+                  legend: { labels: { colors: '#f8fafc' } },
+                  tooltip: { theme: 'dark', y: { formatter: v => formatCurrency(v) } },
+                }}
+                series={[
+                  { name: 'Saldo Projetado', data: data.cashFlowProjection.map(d => d.projectedBalance), type: 'area' },
+                  { name: 'Saída (Contas Fixas)', data: data.cashFlowProjection.map(d => d.expectedExpense), type: 'scatter' },
+                  { name: 'Entrada (Prevista)', data: data.cashFlowProjection.map(d => d.expectedIncome), type: 'scatter' },
+                ]}
+                type="area"
+                height="100%"
+              />
+            </div>
           </>
         ) : (
           <div className="empty-state" style={{ padding: '3rem 2rem', textAlign: 'center', background: 'var(--bg-secondary)', borderRadius: '12px', marginTop: '1rem', border: '1px dashed var(--border-color)' }}>

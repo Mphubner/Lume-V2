@@ -348,21 +348,30 @@ export default function AnalyticsPage() {
                 </div>
               </div>
 
-              {/* Bar Chart */}
+              {/* Bar Chart — ApexCharts */}
               <div className="card">
                 <div className="card-header"><h3 className="card-title">Despesas por Categoria — Visão em Barras</h3></div>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={byCategory.slice(0, 10)} layout="vertical" margin={{ left: 100 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis type="number" stroke="var(--text-muted)" fontSize={12} tickFormatter={v => formatCurrency(v)} />
-                    <YAxis dataKey="name" type="category" stroke="var(--text-muted)" fontSize={12} width={100} />
-                    <Tooltip contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 8, color: '#fff' }} formatter={v => formatCurrency(v)} />
-                    <Bar dataKey="total" radius={[0, 4, 4, 0]}>
-                      {byCategory.slice(0, 10).map((c, i) => <Cell key={i} fill={c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length]} />)}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                <div style={{ height: 300, marginTop: '0.5rem' }}>
+                  <Chart
+                    options={{
+                      chart: { type: 'bar', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
+                      theme: { mode: 'dark' },
+                      colors: byCategory.slice(0, 10).map((c, i) => c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length]),
+                      plotOptions: { bar: { horizontal: true, borderRadius: 4, distributed: true } },
+                      dataLabels: { enabled: false },
+                      xaxis: { categories: byCategory.slice(0, 10).map(c => `${c.icon || ''} ${c.name}`), labels: { style: { colors: '#94a3b8' }, formatter: v => formatCurrency(v) } },
+                      yaxis: { labels: { style: { colors: '#94a3b8' } } },
+                      grid: { borderColor: '#334155', strokeDashArray: 4 },
+                      legend: { show: false },
+                      tooltip: { theme: 'dark', y: { formatter: v => formatCurrency(v) } },
+                    }}
+                    series={[{ name: 'Gasto', data: byCategory.slice(0, 10).map(c => c.total) }]}
+                    type="bar"
+                    height="100%"
+                  />
+                </div>
               </div>
+
             </>
           ) : (
             <EmptyPanel icon="💳" title="Sem dados de despesas" desc="Quando você registrar ou importar transações, verá aqui a distribuição completa por categoria e os rankings dos seus maiores gastos." />

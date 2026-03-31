@@ -3,7 +3,7 @@ import api from '../../services/api';
 import StatCard from '../../components/ui/StatCard';
 import { formatCurrency } from '../../utils/format';
 import { Heart, RefreshCw } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import Chart from 'react-apexcharts';
 
 const CATEGORIES = [
   { key: 'savings_rate_score', label: '🔥 Taxa de Poupança', desc: 'Percentual da renda que você consegue economizar' },
@@ -74,15 +74,25 @@ export default function HealthPage() {
       {/* Score Evolution */}
       <div className="card">
         <div className="card-header"><h3 className="card-title">Evolução do Score</h3></div>
-        <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={history.map(h => ({ date: new Date(h.calculated_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }), score: h.total_score }))}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-            <XAxis dataKey="date" stroke="var(--text-muted)" fontSize={12} />
-            <YAxis domain={[0, 100]} stroke="var(--text-muted)" fontSize={12} />
-            <Tooltip contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 8, color: '#fff' }} />
-            <Line type="monotone" dataKey="score" stroke="var(--accent-gold)" strokeWidth={2} dot={{ r: 4, fill: 'var(--accent-gold)' }} />
-          </LineChart>
-        </ResponsiveContainer>
+        <div style={{ height: 200, marginTop: '0.5rem' }}>
+          <Chart
+            options={{
+              chart: { type: 'line', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
+              theme: { mode: 'dark' },
+              colors: ['var(--accent-gold)'],
+              stroke: { curve: 'smooth', width: 2 },
+              dataLabels: { enabled: false },
+              markers: { size: 4, colors: ['var(--accent-gold)'] },
+              xaxis: { categories: history.map(h => new Date(h.calculated_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })), labels: { style: { colors: '#94a3b8' } }, axisBorder: { show: false }, axisTicks: { show: false } },
+              yaxis: { min: 0, max: 100, labels: { style: { colors: '#94a3b8' } } },
+              grid: { borderColor: '#334155', strokeDashArray: 4 },
+              tooltip: { theme: 'dark' },
+            }}
+            series={[{ name: 'Score', data: history.map(h => h.total_score) }]}
+            type="line"
+            height="100%"
+          />
+        </div>
       </div>
     </div>
   );

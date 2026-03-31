@@ -16,12 +16,13 @@ router.use(authMiddleware);
 // GET /api/transactions?month=&year=&type=&category=&account=&member=&search=&page=&limit=&workspace=
 router.get('/', async (req, res) => {
   try {
-    const { month, year, type, category_id, account_id, member_id, search, import_id, workspace, page = 1, limit = 100, sort = 'date', order = 'desc' } = req.query;
+    const { month, year, type, category_id, account_id, member_id, search, import_id, workspace, page = 1, limit = 100, sort = 'date', order = 'desc', uncategorized } = req.query;
     
     let query = supabase
       .from('transactions')
       .select('*, categories(name, icon, color), accounts(name, institution)', { count: 'exact' })
       .eq('user_id', req.user.id)
+      .neq('is_reconciled', false)  // Only show approved transactions by default
       .order(sort, { ascending: order === 'asc' });
 
     if (month && year) {
@@ -30,10 +31,14 @@ router.get('/', async (req, res) => {
       query = query.gte('date', startDate).lte('date', endDate);
     }
     if (type) query = query.eq('type', type);
-    if (category_id) query = query.eq('category_id', category_id);
+    if (uncategorized === 'true') {
+      query = query.is('category_id', null);
+    } else if (category_id) {
+      query = query.eq('category_id', category_id);
+    }
     if (account_id) query = query.eq('account_id', account_id);
     if (member_id) query = query.eq('member_id', member_id);
-    if (import_id) query = query.eq('import_id', import_id); // Filtro do modal de conferência
+    if (import_id) query = query.eq('import_id', import_id);
     if (search) query = query.ilike('description', `%${search}%`);
 
     if (workspace === 'personal') {

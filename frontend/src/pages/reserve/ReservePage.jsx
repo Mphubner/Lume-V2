@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { formatCurrency } from '../../utils/format';
 import { Shield, Plus, Edit3, Minus, TrendingUp } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import Chart from 'react-apexcharts';
 
 export default function ReservePage() {
   const [reserve, setReserve] = useState({ current_amount: 0, target_amount: 0, monthly_income: 0 });
@@ -128,15 +128,25 @@ export default function ReservePage() {
         <div className="card-header">
           <h3 className="card-title"><TrendingUp size={18} style={{ color: 'var(--color-success)' }} /> Evolução da Reserva</h3>
         </div>
-        <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={history}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-            <XAxis dataKey="month" stroke="var(--text-muted)" fontSize={12} />
-            <YAxis stroke="var(--text-muted)" fontSize={12} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-            <Tooltip contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 8, color: '#fff' }} formatter={v => formatCurrency(v)} />
-            <Area type="monotone" dataKey="amount" stroke="var(--accent-gold)" fill="var(--accent-gold-dim)" strokeWidth={2} />
-          </AreaChart>
-        </ResponsiveContainer>
+        <div style={{ height: 220, marginTop: '0.5rem' }}>
+          <Chart
+            options={{
+              chart: { type: 'area', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
+              theme: { mode: 'dark' },
+              colors: ['#d4a843'],
+              stroke: { curve: 'smooth', width: 2 },
+              dataLabels: { enabled: false },
+              fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05, stops: [0, 90, 100] } },
+              xaxis: { categories: history.map(h => h.month), labels: { style: { colors: '#94a3b8' } }, axisBorder: { show: false }, axisTicks: { show: false } },
+              yaxis: { labels: { formatter: v => `${(v/1000).toFixed(0)}k`, style: { colors: '#94a3b8' } } },
+              grid: { borderColor: '#334155', strokeDashArray: 4 },
+              tooltip: { theme: 'dark', y: { formatter: v => formatCurrency(v) } },
+            }}
+            series={[{ name: 'Reserva', data: history.map(h => h.amount) }]}
+            type="area"
+            height="100%"
+          />
+        </div>
       </div>
 
       {/* Tips */}

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   flexRender,
   getCoreRowModel,
@@ -16,7 +17,11 @@ import { Plus, Search, ArrowLeftRight, ChevronLeft, ChevronRight, RefreshCw, Fil
 
 export default function TransactionsPage() {
   const { currentWorkspace } = useWorkspace();
-  const [activeTab, setActiveTab] = useState('monthly');
+  const location = useLocation();
+  const urlParams = new URLSearchParams(location.search);
+  const uncategorizedFilter = urlParams.get('category') === 'uncategorized';
+
+  const [activeTab, setActiveTab] = useState(uncategorizedFilter ? 'all' : 'monthly');
   const [transactions, setTransactions] = useState([]);
   const [summary, setSummary] = useState({ income: 0, expenses: 0, balance: 0, byCategory: [] });
   const [loading, setLoading] = useState(false);
@@ -60,7 +65,8 @@ export default function TransactionsPage() {
         setTotal(txResult.total || 0);
         setTotalPages(txResult.totalPages || 1);
       } else {
-        const result = await api.getTransactions({ page, limit: 100, search: search || undefined, ...params });
+        const extraParams = uncategorizedFilter ? { uncategorized: 'true' } : {};
+        const result = await api.getTransactions({ page, limit: 100, search: search || undefined, ...params, ...extraParams });
         setTransactions(result.transactions || []);
         setTotal(result.total || 0);
         setTotalPages(result.totalPages || 1);
