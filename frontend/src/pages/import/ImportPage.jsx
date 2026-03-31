@@ -17,7 +17,7 @@ export default function ImportPage() {
 
   const fetchHistory = async () => {
     try {
-      const res = await api.get('/import/history');
+      const res = await api.getImportHistory();
       setHistory(res);
       const hasProcessing = res.some(h => h.status === 'processing');
       setIsPolling(hasProcessing);
@@ -100,6 +100,17 @@ export default function ImportPage() {
                 <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>Upload Inteligente</div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>A IA analisa e categoriza automaticamente</div>
               </div>
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Nome da Conta (Opcional)</label>
+              <input 
+                type="text" 
+                placeholder="Ex: Nubank da Jade, Itaú Empresa..." 
+                value={accountName} 
+                onChange={e => setAccountName(e.target.value)} 
+                style={{ width: '100%', marginBottom: '1rem' }}
+              />
             </div>
 
             <div

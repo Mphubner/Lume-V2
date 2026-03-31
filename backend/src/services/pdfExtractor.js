@@ -29,7 +29,7 @@ export async function extractTransactionsFromPDF(buffer) {
   const cleanedText = preprocessBankText(rawText);
 
   // Step 3: Split into chunks if too large (Groq has token limits)
-  const chunks = splitIntoChunks(cleanedText, 6000);
+  const chunks = splitIntoChunks(cleanedText, 14000);
 
   // Step 4: Send each chunk to AI for structured extraction
   let allTransactions = [];
@@ -177,7 +177,7 @@ ${textChunk}
             { role: 'user', content: userMessage },
           ],
           temperature: 0.05, // Muito baixo para garantir formatação estruturada
-          max_tokens: 2048, // Reduzido de 8192. O Groq cobra (max_tokens + prompt) do limite TPM por minuto.
+          max_tokens: 4000, // Reduzido de 8192. O Groq cobra (max_tokens + prompt) do limite TPM por minuto.
           response_format: { type: 'json_object' },
         }),
       });

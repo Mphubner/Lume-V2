@@ -146,6 +146,23 @@ class ApiService {
     return response.json();
   }
   getImportHistory() { return this.request('/import/history'); }
+
+  async uploadFile(file, accountId) {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (accountId) formData.append('account_id', accountId);
+
+    const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5001/api'}/import/upload`, {
+      method: 'POST',
+      headers: { ...(this.token && { Authorization: `Bearer ${this.token}` }) },
+      body: formData
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Erro na importação');
+    }
+    return res.json();
+  }
   getPendingReconciliation() { return this.request('/import/pending'); }
   reconcileTransaction(id, data) { return this.request(`/import/reconcile/${id}`, { method: 'PATCH', body: data }); }
   reconcileAll(importId) { return this.request('/import/reconcile-all', { method: 'PATCH', body: importId ? { import_id: importId } : {} }); }

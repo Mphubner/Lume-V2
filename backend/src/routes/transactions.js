@@ -160,7 +160,7 @@ router.put('/:id', async (req, res) => {
     console.error('PUT /transactions error:', err);
     res.status(500).json({ error: 'Erro ao atualizar transação' });
   }
-};
+});
 
 // DELETE /api/transactions/:id
 router.delete('/:id', async (req, res) => {
