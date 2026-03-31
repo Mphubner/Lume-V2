@@ -91,19 +91,27 @@ Responda APENAS com JSON: {"category": "nome_categoria", "subcategory": "sugest�
 }
 
 export async function generateInsights(financialData) {
+  const prevScore = financialData.healthScore?.previous;
+  const currScore = financialData.healthScore?.current;
+  const scoreEvolution = prevScore != null && currScore != null
+    ? `\nEvolução do Score de Saúde: ${prevScore} → ${currScore} (${currScore >= prevScore ? '+' : ''}${currScore - prevScore} pontos)`
+    : '';
+
   const result = await callAI([
     {
       role: 'system',
       content: `Você é um consultor financeiro pessoal brasileiro, acessível e amigável.
-Analise os dados e gere insights PRÁTICOS e ACIONÁVEIS. Evite jargões técnicos.
-Use linguagem acolhedora como um coach financeiro.
-Responda em JSON: {"insights": [{"type": "optimization|investment|debt|savings|goal", "title": "...", "description": "...", "potential_savings": 0, "priority": "high|medium|low", "action": "..."}]}`,
+Analise os dados e gere insights EVOLUTIVOS, PREDITIVOS e ACIONÁVEIS. Evite jargões técnicos.
+Use linguagem acolhedora como um coach financeiro que acompanha o progresso do usuário ao longo do tempo.
+Compare com períodos anteriores quando possível. Identifique padrões e faça previsões.${scoreEvolution}
+Classifique os insights por natureza de gasto: Sobrevivência (fixo), Estilo de Vida (variável), Futuro (investimento).
+Responda em JSON: {"insights": [{"type": "optimization|investment|debt|savings|goal|pattern|alert|prediction", "nature": "fixed|variable|future", "title": "...", "description": "...", "potential_savings": 0, "priority": "high|medium|low", "action": "...", "trend": "up|down|stable"}]}`,
     },
     {
       role: 'user',
-      content: `Dados financeiros do usuário:\n${JSON.stringify(financialData, null, 2)}`,
+      content: `Dados financeiros do usuário (período: ${financialData.period || '3 meses'}):\n${JSON.stringify(financialData, null, 2)}`,
     },
-  ], { json: true, temperature: 0.4, maxTokens: 3000 });
+  ], { json: true, temperature: 0.4, maxTokens: 4000 });
 
   try {
     return JSON.parse(result.content);
@@ -162,20 +170,28 @@ export async function chatWithAssistant(message, context) {
   const result = await callAI([
     {
       role: 'system',
-      content: `Você é a Lume ☀️, assistente financeira pessoal. Seja acolhedora, clara e prática.
-Você pode:
-- Consultar gastos ("quanto gastei em alimentação?")
-- Dar dicas financeiras
-- Explicar conceitos de forma simples
-- Ajudar a planejar metas
+      content: `Você é a Lume ☀️, assistente financeira pessoal inteligente. Seja acolhedora, clara e prática.
 
-Contexto financeiro do usuário:
-${JSON.stringify(context)}
+Você tem acesso completo ao perfil financeiro do usuário e pode responder sobre:
+- Gastos por categoria, período, natureza (Sobrevivência, Estilo de Vida, Futuro)
+- Contas fixas e vencimentos próximos
+- Progresso de metas
+- Status de dívidas
+- Reserva de emergência
+- Saúde financeira geral e evolução
+- Padrões de comportamento financeiro identificados nos dados
+- Previsões e recomendações personalizadas
 
-Responda de forma curta e objetiva. Use emojis com moderação. Sempre em português.`,
+Sempre que possível, identifique padrões nos dados (ex: gastos que sobem todo mês, categorias que ultrapassam o orçamento, progress recorrente em alguma meta).
+Faça previsões quando os dados permitirem (ex: "no ritmo atual, sua meta X será atingida em Y meses").
+
+Perfil financeiro completo do usuário:
+${JSON.stringify(context, null, 2)}
+
+Responda de forma objetiva e personalizada. Use emojis com modaração. Sempre em português.`,
     },
     { role: 'user', content: message },
-  ], { temperature: 0.6, maxTokens: 1000 });
+  ], { temperature: 0.6, maxTokens: 1200 });
 
   return result.content || 'Desculpe, não consegui processar sua mensagem. Tente novamente! 😊';
 }

@@ -126,7 +126,7 @@ class ApiService {
   calculateHealth() { return this.request('/health/calculate', { method: 'POST' }); }
 
   // AI
-  getInsights() { return this.request('/ai/insights', { method: 'POST' }); }
+  getInsights(force = false) { return this.request(`/ai/insights${force ? '?force=true' : ''}`, { method: 'POST' }); }
   chat(message) { return this.request('/ai/chat', { method: 'POST', body: { message } }); }
   getAIRules() { return this.request('/ai/rules'); }
   updateAIRule(id, data) { return this.request(`/ai/rules/${id}`, { method: 'PUT', body: data }); }
@@ -146,6 +146,9 @@ class ApiService {
     return response.json();
   }
   getImportHistory() { return this.request('/import/history'); }
+  getPendingReconciliation() { return this.request('/import/pending'); }
+  reconcileTransaction(id, data) { return this.request(`/import/reconcile/${id}`, { method: 'PATCH', body: data }); }
+  reconcileAll(importId) { return this.request('/import/reconcile-all', { method: 'PATCH', body: importId ? { import_id: importId } : {} }); }
 
   // Family / Workspaces
   getFamily() { return this.request('/family'); }

@@ -5,6 +5,12 @@ import { validate } from '../middleware/validate.js';
 import { supabase } from '../config/supabase.js';
 
 const router = Router();
+
+// Mark the user's cached AI insights as stale whenever financial data changes
+async function flagInsightRecalc(userId) {
+  await supabase.from('profiles').update({ needs_insight_recalc: true }).eq('id', userId);
+}
+
 router.use(authMiddleware);
 
 // GET /api/transactions?month=&year=&type=&category=&account=&member=&search=&page=&limit=&workspace=
@@ -120,10 +126,11 @@ router.post('/', validate(transactionSchema), async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('transactions')
-      .insert({ ...req.body, user_id: req.user.id })
+      .insert({ ...req.body, user_id: req.user.id, is_reconciled: true })
       .select()
       .single();
     if (error) throw error;
+    flagInsightRecalc(req.user.id); // Fire-and-forget cache invalidation
     res.status(201).json(data);
   } catch (err) {
     console.error('POST /transactions error:', err);
@@ -142,12 +149,13 @@ router.put('/:id', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+    flagInsightRecalc(req.user.id);
     res.json(data);
   } catch (err) {
     console.error('PUT /transactions error:', err);
     res.status(500).json({ error: 'Erro ao atualizar transação' });
   }
-});
+};
 
 // DELETE /api/transactions/:id
 router.delete('/:id', async (req, res) => {
@@ -158,6 +166,7 @@ router.delete('/:id', async (req, res) => {
       .eq('id', req.params.id)
       .eq('user_id', req.user.id);
     if (error) throw error;
+    flagInsightRecalc(req.user.id);
     res.json({ success: true });
   } catch (err) {
     console.error('DELETE /transactions error:', err);

@@ -83,12 +83,16 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
         categoryId = cat?.id;
       }
 
+      let aiConfidence = null;
       if (!categoryId) {
         try {
           const aiResult = await categorizeTransaction(raw.description, raw.amount, catList, userRules);
           const cat = catList.find(c => c.name === aiResult.category);
           categoryId = cat?.id;
+          aiConfidence = aiResult.confidence ?? null;
         } catch (e) { }
+      } else {
+        aiConfidence = 1.0; // matched by rule — high confidence
       }
 
       // Regra Lógica: Identificar transferências para não impactar Receita/Despesa (exceto salários)
@@ -107,7 +111,9 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
         origin: 'import',
         import_hash: hash,
         is_confirmed: true,
-        import_id: importRecordId // Vínculo para auditoria
+        is_reconciled: false,           // Awaits user review
+        ai_confidence: aiConfidence,    // Used to highlight low-confidence items
+        import_id: importRecordId
       });
       imported++;
     }
@@ -172,6 +178,87 @@ router.get('/history', async (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: 'Erro ao buscar histórico de importações' });
+  }
+});
+
+// GET /api/import/pending — All transactions awaiting reconciliation
+router.get('/pending', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*, categories(id, name, icon, color), accounts(name)')
+      .eq('user_id', req.user.id)
+      .eq('is_reconciled', false)
+      .eq('origin', 'import')
+      .order('date', { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    res.json({ transactions: data || [], count: (data || []).length });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar transações pendentes' });
+  }
+});
+
+// PATCH /api/import/reconcile/:id — Approve or correct a pending transaction
+router.patch('/reconcile/:id', async (req, res) => {
+  try {
+    const { category_id, approved } = req.body;
+    const { id } = req.params;
+
+    // Fetch original to detect category change for ML learning
+    const { data: original } = await supabase
+      .from('transactions')
+      .select('category_id, description, categories(name)')
+      .eq('id', id)
+      .eq('user_id', req.user.id)
+      .single();
+
+    // If user corrected the category, save as ai_rule for passive learning
+    if (category_id && original?.category_id && category_id !== original.category_id) {
+      const { data: newCat } = await supabase.from('categories').select('name').eq('id', category_id).single();
+      if (newCat && original.description) {
+        const keyword = original.description.split(' ').slice(0, 3).join(' ').toLowerCase();
+        // Upsert rule — avoid duplicates
+        await supabase.from('ai_rules').upsert({
+          user_id: req.user.id,
+          keyword,
+          category_id,
+          is_active: true,
+          usage_count: 1,
+        }, { onConflict: 'user_id,keyword', ignoreDuplicates: false });
+      }
+    }
+
+    const updatePayload = { is_reconciled: true };
+    if (category_id) updatePayload.category_id = category_id;
+
+    const { data, error } = await supabase
+      .from('transactions')
+      .update(updatePayload)
+      .eq('id', id)
+      .eq('user_id', req.user.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao conciliar transação: ' + err.message });
+  }
+});
+
+// PATCH /api/import/reconcile-all — Bulk approve all pending
+router.patch('/reconcile-all', async (req, res) => {
+  try {
+    const { import_id } = req.body;
+    let query = supabase.from('transactions').update({ is_reconciled: true })
+      .eq('user_id', req.user.id).eq('is_reconciled', false).eq('origin', 'import');
+    if (import_id) query = query.eq('import_id', import_id);
+    const { error } = await query;
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao aprovar todas: ' + err.message });
   }
 });
 

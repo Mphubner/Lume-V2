@@ -1,137 +1,344 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/format';
-import { Scale, Check, X, AlertTriangle } from 'lucide-react';
+import { Check, X, ChevronDown, AlertTriangle, Zap, CheckCircle2, RefreshCw, ArrowRight } from 'lucide-react';
+
+const CONFIDENCE_LABEL = (c) => {
+  if (c === null || c === undefined) return { label: 'Sem IA', color: 'var(--text-muted)', icon: '🔵' };
+  if (c >= 0.8) return { label: 'Alta confiança', color: 'var(--color-success)', icon: '🟢' };
+  if (c >= 0.5) return { label: 'Média confiança', color: 'var(--color-warning)', icon: '🟡' };
+  return { label: 'Baixa confiança', color: 'var(--color-danger)', icon: '🔴' };
+};
 
 export default function ReconciliationPage() {
+  const [pending, setPending] = useState([]);
   const [imports, setImports] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [selectedImport, setSelectedImport] = useState(null);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [processing, setProcessing] = useState({}); // {id: true}
+  const [editingId, setEditingId] = useState(null);
+  const [editCatId, setEditCatId] = useState('');
+  const [activeTab, setActiveTab] = useState('pending');
+  const [filter, setFilter] = useState('all'); // all | low | medium | high
 
-  useEffect(() => { loadImports(); }, []);
-
-  const loadImports = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await api.getImportHistory();
-      setImports(result || []);
-    } catch {
-      setImports([
-        { id: '1', filename: 'extrato_nubank_dez2025.ofx', file_type: 'ofx', total_transactions: 45, imported_transactions: 42, duplicates_skipped: 3, status: 'completed', created_at: '2025-12-28T14:30:00Z', accounts: { name: 'Nubank' } },
-        { id: '2', filename: 'extrato_itau_nov2025.csv', file_type: 'csv', total_transactions: 32, imported_transactions: 30, duplicates_skipped: 2, status: 'completed', created_at: '2025-11-30T10:15:00Z', accounts: { name: 'Itaú' } },
-        { id: '3', filename: 'fatura_nubank_jan2026.pdf', file_type: 'pdf', total_transactions: 28, imported_transactions: 28, duplicates_skipped: 0, status: 'completed', created_at: '2026-01-15T09:00:00Z', accounts: { name: 'Nubank Cartão' } },
+      const [pendingRes, historyRes, catsRes] = await Promise.all([
+        api.getPendingReconciliation(),
+        api.getImportHistory(),
+        api.getCategories(),
       ]);
+      setPending(pendingRes.transactions || []);
+      setImports(historyRes || []);
+      setCategories(catsRes || []);
+    } catch {
+      setPending([]);
+      setImports([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // ── Approve a single transaction ──────────────────────────────────────────
+  const approve = async (id) => {
+    setProcessing(p => ({ ...p, [id]: true }));
+    try {
+      await api.reconcileTransaction(id, { approved: true });
+      setPending(prev => prev.filter(t => t.id !== id));
+    } catch { /* keep in list on error */ }
+    finally { setProcessing(p => ({ ...p, [id]: false })); }
+  };
+
+  // ── Save a corrected category and approve ─────────────────────────────────
+  const saveCorrection = async (id) => {
+    if (!editCatId) return;
+    setProcessing(p => ({ ...p, [id]: true }));
+    try {
+      await api.reconcileTransaction(id, { category_id: editCatId, approved: true });
+      setPending(prev => prev.filter(t => t.id !== id));
+      setEditingId(null);
+    } catch { }
+    finally { setProcessing(p => ({ ...p, [id]: false })); }
+  };
+
+  // ── Approve all at once ───────────────────────────────────────────────────
+  const approveAll = async () => {
+    setLoading(true);
+    try {
+      await api.reconcileAll();
+      setPending([]);
     } finally { setLoading(false); }
   };
 
-  const statusBadge = (status) => {
-    const map = { completed: 'badge-success', processing: 'badge-warning', failed: 'badge-danger' };
-    const labels = { completed: '✅ Concluída', processing: '⏳ Processando', failed: '❌ Falhou' };
-    return <span className={`badge ${map[status] || 'badge-info'}`}>{labels[status] || status}</span>;
-  };
+  // ── Computed ──────────────────────────────────────────────────────────────
+  const filtered = pending.filter(t => {
+    const c = t.ai_confidence;
+    if (filter === 'low') return c !== null && c < 0.5;
+    if (filter === 'medium') return c !== null && c >= 0.5 && c < 0.8;
+    if (filter === 'high') return c === null || c >= 0.8;
+    return true;
+  });
 
-  const fileIcon = (type) => {
-    const icons = { pdf: '📄', csv: '📊', xlsx: '📑', ofx: '🏦' };
-    return icons[type] || '📄';
-  };
+  const lowCount = pending.filter(t => t.ai_confidence !== null && t.ai_confidence < 0.5).length;
+  const totalAmount = filtered.reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div>
       <div className="page-header">
-        <h1>Conferir Extratos</h1>
-        <p>Revise e confira suas importações — veja o que a IA categorizou automaticamente</p>
+        <div>
+          <h1>Conferir Extratos</h1>
+          <p>Revise o que a IA categorizou — corrija e aprove para confirmar no seu histórico</p>
+        </div>
+        {pending.length > 0 && (
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <button className="btn btn-secondary btn-sm" onClick={load}>
+              <RefreshCw size={14} /> Atualizar
+            </button>
+            <button className="btn btn-primary" onClick={approveAll}>
+              <CheckCircle2 size={16} /> Aprovar Tudo ({pending.length})
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* TABS */}
+      <div className="tabs" style={{ width: 'fit-content', marginBottom: '1.5rem' }}>
+        <button className={`tab ${activeTab === 'pending' ? 'active' : ''}`} onClick={() => setActiveTab('pending')}>
+          ✅ Aguardando Revisão {pending.length > 0 && <span className="badge badge-danger" style={{ marginLeft: 4 }}>{pending.length}</span>}
+        </button>
+        <button className={`tab ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>
+          📋 Histórico de Importações
+        </button>
       </div>
 
       {loading ? (
         <div className="loading-spinner"><div className="spinner" /></div>
-      ) : imports.length === 0 ? (
-        <div className="card">
-          <div className="empty-state">
-            <div className="empty-state-icon"><Scale size={48} /></div>
-            <h3>Nada para conferir</h3>
-            <p>Importe um extrato bancário na página "Importar" para começar a conferir suas transações</p>
-            <a href="/importar" className="btn btn-primary">📤 Ir para Importar</a>
-          </div>
-        </div>
-      ) : (
-        <div>
-          {/* Summary */}
-          <div className="grid grid-3" style={{ marginBottom: '1.5rem' }}>
-            <div className="card" style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--accent-gold)' }}>{imports.length}</div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Importações realizadas</div>
-            </div>
-            <div className="card" style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--color-success)' }}>{imports.reduce((s, i) => s + (i.imported_transactions || 0), 0)}</div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Transações importadas</div>
-            </div>
-            <div className="card" style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--color-warning)' }}>{imports.reduce((s, i) => s + (i.duplicates_skipped || 0), 0)}</div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Duplicatas ignoradas</div>
+      ) : activeTab === 'pending' ? (
+        /* ─── PENDING REVIEW TAB ─────────────────────────────────────────── */
+        pending.length === 0 ? (
+          <div className="card">
+            <div className="empty-state">
+              <div className="empty-state-icon"><CheckCircle2 size={48} style={{ color: 'var(--color-success)' }} /></div>
+              <h3>Tudo em dia! 🎉</h3>
+              <p>Não há transações aguardando revisão. Importe um extrato para começar.</p>
+              <a href="/importar" className="btn btn-primary">📤 Importar Extrato</a>
             </div>
           </div>
+        ) : (
+          <>
+            {/* Stats row */}
+            <div className="grid grid-3" style={{ marginBottom: '1.5rem' }}>
+              <div className="card" style={{ textAlign: 'center', padding: '1rem' }}>
+                <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--accent-gold)' }}>{pending.length}</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Transações para revisar</div>
+              </div>
+              <div className="card" style={{ textAlign: 'center', padding: '1rem' }}>
+                <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--color-danger)' }}>{lowCount}</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>IA incerta (baixa confiança)</div>
+              </div>
+              <div className="card" style={{ textAlign: 'center', padding: '1rem' }}>
+                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--color-success)' }}>{formatCurrency(totalAmount)}</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Volume total filtrado</div>
+              </div>
+            </div>
 
-          {/* Import History Table */}
+            {/* Filter chips */}
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+              {[
+                { key: 'all', label: `Todas (${pending.length})` },
+                { key: 'low', label: `🔴 Baixa confiança (${lowCount})` },
+                { key: 'medium', label: `🟡 Média` },
+                { key: 'high', label: `🟢 Alta` },
+              ].map(f => (
+                <button
+                  key={f.key}
+                  onClick={() => setFilter(f.key)}
+                  className={`btn ${filter === f.key ? 'btn-primary' : 'btn-secondary'} btn-sm`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Cards */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {filtered.map(tx => {
+                const conf = CONFIDENCE_LABEL(tx.ai_confidence);
+                const isEditing = editingId === tx.id;
+                const busy = processing[tx.id];
+
+                return (
+                  <div
+                    key={tx.id}
+                    className="card"
+                    style={{
+                      padding: '1rem 1.25rem',
+                      borderLeft: `4px solid ${conf.color}`,
+                      opacity: busy ? 0.5 : 1,
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                      {/* Date + Description */}
+                      <div style={{ flex: 1, minWidth: 200 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.2rem' }}>{tx.description}</div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          {tx.date} · {tx.accounts?.name || 'Conta desconhecida'}
+                        </div>
+                      </div>
+
+                      {/* Amount */}
+                      <div style={{ fontWeight: 700, fontSize: '1rem', color: tx.type === 'income' ? 'var(--color-success)' : 'var(--color-danger)', minWidth: 90, textAlign: 'right' }}>
+                        {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount))}
+                      </div>
+
+                      {/* AI Category suggestion */}
+                      {isEditing ? (
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <select
+                            value={editCatId}
+                            onChange={e => setEditCatId(e.target.value)}
+                            style={{ fontSize: '0.85rem', padding: '0.35rem 0.6rem' }}
+                            autoFocus
+                          >
+                            <option value="">Selecionar categoria...</option>
+                            {categories.filter(c => !c.parent_id).map(parent => {
+                              const children = categories.filter(c => c.parent_id === parent.id);
+                              return children.length > 0 ? (
+                                <optgroup key={parent.id} label={`${parent.icon} ${parent.name}`}>
+                                  {children.map(child => (
+                                    <option key={child.id} value={child.id}>{child.icon} {child.name}</option>
+                                  ))}
+                                </optgroup>
+                              ) : (
+                                <option key={parent.id} value={parent.id}>{parent.icon} {parent.name}</option>
+                              );
+                            })}
+                          </select>
+                          <button className="btn btn-primary btn-sm" onClick={() => saveCorrection(tx.id)} disabled={!editCatId}>
+                            <Check size={14} /> Salvar
+                          </button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => setEditingId(null)}>
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { setEditingId(tx.id); setEditCatId(tx.categories?.id || ''); }}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                            padding: '0.35rem 0.7rem', borderRadius: 'var(--border-radius-full)',
+                            background: 'var(--bg-secondary)', border: `1px solid ${tx.categories?.color || 'var(--border-color)'}`,
+                            cursor: 'pointer', fontSize: '0.82rem', fontWeight: 500,
+                          }}
+                          title="Clique para corrigir a categoria"
+                        >
+                          {tx.categories?.icon || '📦'} {tx.categories?.name || 'Sem categoria'}
+                          <ChevronDown size={12} style={{ opacity: 0.5 }} />
+                        </button>
+                      )}
+
+                      {/* Confidence badge */}
+                      <div style={{ fontSize: '0.72rem', color: conf.color, fontWeight: 600, minWidth: 100, textAlign: 'center' }}>
+                        {conf.icon} {conf.label}
+                        {tx.ai_confidence !== null && tx.ai_confidence !== undefined && (
+                          <span style={{ opacity: 0.6, marginLeft: 4 }}>({Math.round(tx.ai_confidence * 100)}%)</span>
+                        )}
+                      </div>
+
+                      {/* Actions */}
+                      {!isEditing && (
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => approve(tx.id)}
+                            disabled={busy}
+                            title="Aprovar categoria sugerida pela IA"
+                          >
+                            <Check size={14} /> Aprovar
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Bottom CTA */}
+            {filtered.length === 0 && filter !== 'all' && (
+              <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+                <p style={{ color: 'var(--text-muted)' }}>Nenhuma transação com esse filtro de confiança.</p>
+              </div>
+            )}
+          </>
+        )
+      ) : (
+        /* ─── HISTORY TAB ────────────────────────────────────────────────── */
+        imports.length === 0 ? (
+          <div className="card">
+            <div className="empty-state">
+              <h3>Nenhuma importação ainda</h3>
+              <a href="/importar" className="btn btn-primary">📤 Importar Extrato</a>
+            </div>
+          </div>
+        ) : (
           <div className="card">
             <div className="card-header">
               <h3 className="card-title">📋 Histórico de Importações</h3>
             </div>
             <table className="data-table">
               <thead>
-                <tr><th>Arquivo</th><th>Conta</th><th>Transações</th><th>Importadas</th><th>Duplicatas</th><th>Status</th><th>Data</th></tr>
+                <tr>
+                  <th>Arquivo</th><th>Conta</th><th>Total</th><th>Importadas</th><th>Duplicatas</th><th>Status</th><th>Data</th>
+                </tr>
               </thead>
               <tbody>
                 {imports.map(imp => (
-                  <tr key={imp.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedImport(selectedImport === imp.id ? null : imp.id)}>
+                  <tr key={imp.id}>
                     <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <span style={{ fontSize: '1.25rem' }}>{fileIcon(imp.file_type)}</span>
-                        <div>
-                          <div style={{ fontWeight: 500, fontSize: '0.85rem' }}>{imp.filename}</div>
-                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{imp.file_type?.toUpperCase()}</div>
-                        </div>
-                      </div>
+                      <div style={{ fontWeight: 500, fontSize: '0.85rem' }}>{imp.filename}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{imp.file_type?.toUpperCase()}</div>
                     </td>
                     <td>{imp.accounts?.name || '-'}</td>
                     <td style={{ fontWeight: 600 }}>{imp.total_transactions}</td>
                     <td style={{ color: 'var(--color-success)', fontWeight: 600 }}>{imp.imported_transactions}</td>
                     <td style={{ color: imp.duplicates_skipped > 0 ? 'var(--color-warning)' : 'var(--text-muted)' }}>{imp.duplicates_skipped}</td>
-                    <td>{statusBadge(imp.status)}</td>
-                    <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{imp.created_at ? new Date(imp.created_at).toLocaleDateString('pt-BR') : '-'}</td>
+                    <td>
+                      <span className={`badge ${imp.status === 'completed' ? 'badge-success' : imp.status === 'processing' ? 'badge-warning' : 'badge-danger'}`}>
+                        {imp.status === 'completed' ? '✅ Concluída' : imp.status === 'processing' ? '⏳ Processando' : '❌ Falhou'}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      {imp.created_at ? new Date(imp.created_at).toLocaleDateString('pt-BR') : '-'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-
-            {selectedImport && (
-              <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--border-radius-sm)' }}>
-                <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>📊 Detalhes da Importação</div>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
-                  A IA classificou automaticamente as transações com base nas descrições e nas suas regras de categorização.
-                </p>
-                <div style={{ display: 'flex', gap: '1rem' }}>
-                  <a href="/lancamentos" className="btn btn-secondary btn-sm">📋 Ver Transações Importadas</a>
-                  <a href="/configuracoes" className="btn btn-ghost btn-sm">🤖 Ajustar Regras da IA</a>
-                </div>
-              </div>
-            )}
           </div>
+        )
+      )}
 
-          {/* Tips */}
-          <div className="card" style={{ marginTop: '1.5rem' }}>
-            <h3 className="card-title" style={{ marginBottom: '1rem' }}>💡 Como melhorar a categorização</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {[
-                { icon: '🤖', text: 'A cada transação que você reclassifica, a IA aprende e cria regras automáticas' },
-                { icon: '📋', text: 'Vá em Configurações > IA para ver e editar suas regras de categorização' },
-                { icon: '🔁', text: 'Reimporte um extrato — duplicatas são automaticamente ignoradas' },
-                { icon: '⚡', text: 'Quanto mais você usa, mais precisa a categorização automática fica' },
-              ].map((tip, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                  <span style={{ fontSize: '1.25rem' }}>{tip.icon}</span> {tip.text}
-                </div>
-              ))}
-            </div>
+      {/* Tips */}
+      {activeTab === 'pending' && pending.length > 0 && (
+        <div className="card" style={{ marginTop: '1.5rem' }}>
+          <h3 className="card-title" style={{ marginBottom: '0.75rem' }}>💡 Como funciona o aprendizado</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            {[
+              { icon: '🟢', text: 'Clique em "Aprovar" para confirmar a categoria que a IA sugeriu' },
+              { icon: '✏️', text: 'Clique na badge de categoria para corrigi-la — a IA vai aprender para as próximas importações' },
+              { icon: '⚡', text: '"Aprovar Tudo" confirma todas as transações com a categoria atual da IA' },
+              { icon: '🔴', text: 'Transações com confiança baixa merecem maior atenção antes de aprovar' },
+            ].map((tip, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.4rem 0.5rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                <span style={{ fontSize: '1.1rem' }}>{tip.icon}</span> {tip.text}
+              </div>
+            ))}
           </div>
         </div>
       )}
