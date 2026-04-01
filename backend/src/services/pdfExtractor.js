@@ -342,6 +342,8 @@ ${catRule}
     // Fix trailing commas
     cleaned = cleaned.replace(/,\s*([\]}])/g, '$1');
     try { return JSON.parse(cleaned); } catch(e) {}
+    
+    console.error('Raw response failing parse:', str.substring(0, 1000));
     throw new Error('Raw response not parsable');
   }
 
