@@ -29,7 +29,7 @@ export async function extractTransactionsFromPDF(buffer, categories = []) {
   const cleanedText = preprocessBankText(rawText);
 
   // Step 3: Split into chunks safely with overlap
-  const chunks = splitIntoChunksSafely(cleanedText, 3500);
+  const chunks = splitIntoChunksSafely(cleanedText, 2500);
 
   // Step 4: Send each chunk to AI for structured extraction sequentially with a delay
   let allTransactions = [];
@@ -53,7 +53,7 @@ export async function extractTransactionsFromPDF(buffer, categories = []) {
 
     // Delay obrigatório para não estourar o TPM (se não for o último chunk)
     if (i < chunks.length - 1) {
-      const waitSeconds = 12;
+      const waitSeconds = 20;
       console.log(`⏳ Aguardando ${waitSeconds}s antes do próximo chunk para evitar Rate Limit...`);
       await new Promise(r => setTimeout(r, waitSeconds * 1000));
     }
@@ -145,7 +145,7 @@ async function extractWithAI(textChunk, categories = []) {
     together: 'https://api.together.xyz/v1',
   };
   const baseUrl = baseUrls[provider] || baseUrls.groq;
-  const model = process.env.AI_MODEL_EXTRACTION || 'llama-3.3-70b-versatile';
+  const model = process.env.AI_MODEL_EXTRACTION || 'llama-3.1-8b-instant';
 
   const catRule = categories && categories.length > 0
     ? `6. A "categoria" da transação DEVE ser EXATAMENTE uma da lista abaixo, a que mais fizer sentido. Se nenhuma se encaixar, coloque "Outros".\nLISTA DE CATEGORIAS:\n[${categories.join(', ')}]`
@@ -191,7 +191,7 @@ ${textChunk}
             { role: 'user', content: userMessage },
           ],
           temperature: 0.05,
-          max_tokens: 1500, // Reduced token size for large files chunking
+          max_tokens: 1000, // Reduced token size for large files chunking
           response_format: { type: 'json_object' },
         }),
       });
