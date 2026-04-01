@@ -29,16 +29,17 @@ export async function extractTransactionsFromPDF(buffer, categories = []) {
   const cleanedText = preprocessBankText(rawText);
 
   // Step 3: Split into chunks safely with overlap
-  const chunks = splitIntoChunksSafely(cleanedText, 2500);
+  // 8b-instant has 500k TPD and 131k TPM — we can safely use bigger chunks
+  const chunks = splitIntoChunksSafely(cleanedText, 5000);
 
   // Step 4: Send each chunk to AI for structured extraction sequentially with a delay
   let allTransactions = [];
   let titularDetectado = null;
 
-  console.log(`📦 PDF dividido em ${chunks.length} partes. Iniciando extração sequencial...`);
+  console.log(`📦 PDF dividido em ${chunks.length} partes (${cleanedText.length} chars total). Iniciando extração sequencial...`);
 
   for (let i = 0; i < chunks.length; i++) {
-    console.log(`Processando parte ${i + 1}/${chunks.length}...`);
+    console.log(`Processando parte ${i + 1}/${chunks.length} (${chunks[i].length} chars)...`);
     const aiData = await extractWithAI(chunks[i], categories);
     
     if (aiData.titular && !titularDetectado) {
@@ -47,22 +48,25 @@ export async function extractTransactionsFromPDF(buffer, categories = []) {
     
     if (aiData.transactions && aiData.transactions.length > 0) {
       allTransactions.push(...aiData.transactions);
+      console.log(`✅ Parte ${i + 1}: ${aiData.transactions.length} transações extraídas (acumulado: ${allTransactions.length})`);
     } else {
       console.warn(`⚠️ Parte ${i + 1} não retornou transações válidas.`);
     }
 
     // Delay obrigatório para não estourar o TPM (se não for o último chunk)
     if (i < chunks.length - 1) {
-      const waitSeconds = 20;
+      const waitSeconds = 15;
       console.log(`⏳ Aguardando ${waitSeconds}s antes do próximo chunk para evitar Rate Limit...`);
       await new Promise(r => setTimeout(r, waitSeconds * 1000));
     }
   }
 
   // Step 5: Post-process and validate
+  const beforeDedup = allTransactions.length;
   allTransactions = postProcessTransactions(allTransactions);
+  const removed = beforeDedup - allTransactions.length;
 
-  console.log(`📄 PDF extraction complete: ${allTransactions.length} transactions. Titular: ${titularDetectado || 'Desconhecido'}`);
+  console.log(`📄 PDF extraction complete: ${allTransactions.length} transactions (${removed} removidas por dedup/filtro). Titular: ${titularDetectado || 'Desconhecido'}`);
   return { titular: titularDetectado, transactions: allTransactions };
 }
 
@@ -111,7 +115,7 @@ function splitIntoChunksSafely(text, maxChars) {
   const chunks = [];
   let currentChunkLines = [];
   let currentLength = 0;
-  const overlapSize = 10; // Maintains context across chunks
+  const overlapSize = 5; // Overlap reduzido: menos confusão para a IA, menos duplicatas
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -176,7 +180,7 @@ ${catRule}
 ${textChunk}
 --- FIM DO EXTRATO ---`;
 
-  const makeRequest = async (retries = 3, delay = 4000) => {
+  const makeRequest = async (retries = 5, delay = 5000) => {
     try {
       const response = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
@@ -191,7 +195,7 @@ ${textChunk}
             { role: 'user', content: userMessage },
           ],
           temperature: 0.05,
-          max_tokens: 1000, // Reduced token size for large files chunking
+          max_tokens: 2000, // Enough for ~40 transactions per chunk
           response_format: { type: 'json_object' },
         }),
       });
@@ -199,15 +203,20 @@ ${textChunk}
       if (!response.ok) {
         const errText = await response.text();
 
-        // Dynamic Rate Limit parsing
+        // Dynamic Rate Limit parsing (handles both "Xs" and "XmYs" formats)
         if (response.status === 429 && retries > 0) {
           let dynamicDelay = delay;
-          const waitMatch = errText.match(/in ([\d.]+)s/);
-          if (waitMatch && waitMatch[1]) {
-            dynamicDelay = (parseFloat(waitMatch[1]) + 0.5) * 1000;
+          // Parse "try again in 27m26.784s" or "try again in 9.7s"
+          const minMatch = errText.match(/in (\d+)m([\d.]+)s/);
+          const secMatch = errText.match(/in ([\d.]+)s/);
+          if (minMatch) {
+            const totalSec = parseInt(minMatch[1]) * 60 + parseFloat(minMatch[2]) + 2;
+            dynamicDelay = totalSec * 1000;
+          } else if (secMatch && secMatch[1]) {
+            dynamicDelay = (parseFloat(secMatch[1]) + 2) * 1000;
           }
-          console.warn(`⏳ AI Rate limite atingido (429). Aguardando ${(dynamicDelay / 1000).toFixed(1)}s para tentar novamente...`);
-          await new Promise(resolve => setTimeout(resolve, Math.max(dynamicDelay, 2000)));
+          console.warn(`⏳ AI Rate limite atingido (429). Aguardando ${(dynamicDelay / 1000).toFixed(1)}s para tentar novamente (${retries - 1} retries restantes)...`);
+          await new Promise(resolve => setTimeout(resolve, Math.max(dynamicDelay, 3000)));
           return makeRequest(retries - 1, delay * 1.5);
         }
 
@@ -304,10 +313,14 @@ ${textChunk}
 
 /**
  * Post-process: deduplicate, validate, and normalize
+ * Uses a counter-based key to allow max 2 identical transactions 
+ * (real-world: same store, same day, same value can happen once or twice)
+ * but blocks 3+ which are almost certainly chunk-overlap artifacts.
  */
 function postProcessTransactions(transactions) {
-  const seen = new Set();
+  const seen = new Map(); // key -> count
   const valid = [];
+  const MAX_IDENTICAL = 2; // Allow up to 2 identical transactions (realistic)
 
   for (const t of transactions) {
     if (!t.description || t.description.length < 2) continue;
@@ -320,9 +333,14 @@ function postProcessTransactions(transactions) {
       continue;
     }
 
-    const key = `${t.date}-${t.description}-${t.amount}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    // Normalize the key: trim description, round amount to 2 decimals
+    const normalizedDesc = t.description.trim().toLowerCase();
+    const normalizedAmount = Math.round(t.amount * 100) / 100;
+    const key = `${t.date}|${normalizedDesc}|${normalizedAmount}`;
+    
+    const count = seen.get(key) || 0;
+    if (count >= MAX_IDENTICAL) continue; // Block 3rd+ identical
+    seen.set(key, count + 1);
 
     valid.push(t);
   }

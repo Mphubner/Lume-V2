@@ -53,6 +53,7 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
 
     let imported = 0;
     let duplicates = 0;
+    const batchHashes = new Set(); // Previne duplicatas dentro do mesmo lote de importação
 
     for (const raw of rawTransactions) {
       if (!raw.description || raw.amount === undefined || raw.amount === null) continue;
@@ -67,6 +68,12 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
       }
 
       const hash = Buffer.from(`${normalizedDate}-${raw.description}-${raw.amount}`).toString('base64');
+      
+      // Guard 1: Intra-batch duplicate (overlap de chunks pode gerar a mesma transação 2x)
+      if (batchHashes.has(hash)) { duplicates++; continue; }
+      batchHashes.add(hash);
+      
+      // Guard 2: Duplicate already in database (reimportação do mesmo arquivo)
       const { data: existing } = await supabase.from('transactions').select('id').eq('import_hash', hash).eq('user_id', user.id).limit(1);
       if (existing?.length > 0) { duplicates++; continue; }
 
