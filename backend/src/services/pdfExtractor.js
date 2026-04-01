@@ -145,7 +145,8 @@ function splitIntoChunksSafely(text, maxChars) {
   const chunks = [];
   let currentChunkLines = [];
   let currentLength = 0;
-  const overlapSize = 5; // Overlap reduzido: menos confusão para a IA, menos duplicatas
+  // overlapSize = 0 => Evita deduplicação de transações entre chunks
+  const overlapSize = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];

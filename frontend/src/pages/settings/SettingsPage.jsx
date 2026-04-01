@@ -277,28 +277,44 @@ export default function SettingsPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
               {Object.entries(
                 categories.reduce((acc, cat) => {
-                  const group = cat.group_name || 'Outras / Personalizadas';
+                  const group = cat.type === 'expense' ? 'Despesas' : cat.type === 'income' ? 'Receitas' : 'Outros / Ajustes';
                   if (!acc[group]) acc[group] = [];
                   acc[group].push(cat);
                   return acc;
                 }, {})
               ).map(([group, cats]) => (
-                <div key={group}>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <div key={group} style={{ marginBottom: '1.5rem' }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                     {group}
                   </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '1rem' }}>
                     {cats.map(cat => (
-                      <button 
+                      <div 
                         key={cat.id} 
-                        onClick={() => openEditCategory(cat)}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.375rem', padding: '0.375rem 0.75rem', borderRadius: 'var(--border-radius-full)', background: 'var(--bg-secondary)', fontSize: '0.85rem', border: `1px solid ${cat.color || 'var(--border-color)'}`, cursor: 'pointer' }}
+                        style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem', borderRadius: 'var(--border-radius-lg)', background: 'var(--bg-secondary)', borderLeft: `4px solid ${cat.color || 'var(--border-color)'}`, position: 'relative' }}
                       >
-                        {cat.icon} {cat.name}
-                        {cat.is_system && <span className="badge badge-info" style={{ padding: '0 0.25rem', fontSize: '0.6rem' }}>sistema</span>}
-                        {cat.subcategories && cat.subcategories.length > 0 && <span style={{ opacity: 0.6, fontSize: '0.7rem', marginLeft: '0.2rem' }}>({cat.subcategories.length} sub)</span>}
-                        {!cat.is_system && <Edit3 size={12} style={{ opacity: 0.5, marginLeft: '0.25rem' }}/>}
-                      </button>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                            {cat.icon} {cat.name}
+                          </span>
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                             {cat.is_system && <span style={{ padding: '0.1rem 0.375rem', fontSize: '0.65rem', borderRadius: '4px', background: cat.color ? `${cat.color}20` : 'rgba(255,255,255,0.1)', color: cat.color || '#fff', fontWeight: 600 }}>sistema</span>}
+                             {!cat.is_system && <Edit3 size={14} style={{ opacity: 0.5, cursor: 'pointer' }} onClick={() => openEditCategory(cat)} />}
+                          </div>
+                        </div>
+                        {cat.subcategories && cat.subcategories.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginTop: '0.25rem' }}>
+                            {cat.subcategories.map(s => (
+                              <span key={s} style={{ padding: '0.15rem 0.4rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', color: 'var(--text-secondary)' }}>
+                                {s}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {(!cat.subcategories || cat.subcategories.length === 0) && (
+                           <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Nenhuma subcategoria</span>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </div>
