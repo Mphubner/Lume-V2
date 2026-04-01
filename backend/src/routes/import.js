@@ -67,7 +67,9 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
         normalizedDate = `20${y}-${m}-${d}`;
       }
 
-      const hash = Buffer.from(`${normalizedDate}-${raw.description}-${raw.amount}`).toString('base64');
+      // Normaliza a descrição para o hash para evitar duplicatas por variações da IA nos overlaps
+      const normalizedDescForHash = raw.description.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 15);
+      const hash = Buffer.from(`${normalizedDate}-${normalizedDescForHash}-${raw.amount}`).toString('base64');
       
       // Guard 1: Intra-batch duplicate (overlap de chunks pode gerar a mesma transação 2x)
       if (batchHashes.has(hash)) { duplicates++; continue; }
@@ -231,15 +233,39 @@ router.patch('/reconcile/:id', async (req, res) => {
     // Fetch original to detect category change for ML learning
     const { data: original } = await supabase
       .from('transactions')
-      .select('category_id, description, categories(name)')
+      .select('category_id, description, amount, categories(name)')
       .eq('id', id)
       .eq('user_id', req.user.id)
       .single();
 
+    const updatePayload = { is_reconciled: true };
+    
+    // Auto-correct transaction TYPE, is_internal_transfer, and amount sign
+    if (category_id) {
+      updatePayload.category_id = category_id;
+      
+      const { data: newCat } = await supabase.from('categories').select('name, nature, group_name').eq('id', category_id).single();
+      if (newCat) {
+        if (newCat.nature === 'income') {
+          updatePayload.type = 'income';
+          updatePayload.is_internal_transfer = false;
+          updatePayload.amount = Math.abs(original?.amount || 0);
+        } else if (newCat.nature === 'expense') {
+          updatePayload.type = 'expense';
+          updatePayload.is_internal_transfer = false;
+          updatePayload.amount = -Math.abs(original?.amount || 0);
+        } else if (newCat.nature === 'transfer' || newCat.group_name?.includes('Transfer')) {
+          updatePayload.type = 'transfer';
+          updatePayload.is_internal_transfer = true;
+          // Maintain original amount exactly as it came/exited
+        }
+      }
+    }
+
     // If user corrected the category, save as ai_rule for passive learning
-    if (category_id && original?.category_id && category_id !== original.category_id) {
-      const { data: newCat } = await supabase.from('categories').select('name').eq('id', category_id).single();
-      if (newCat && original.description) {
+    if (category_id && original?.category_id && category_id !== original.category_id && updatePayload.type) {
+      const { data: newCatName } = await supabase.from('categories').select('name').eq('id', category_id).single();
+      if (newCatName && original.description) {
         const keyword = original.description.split(' ').slice(0, 3).join(' ').toLowerCase();
         // Upsert rule — avoid duplicates
         await supabase.from('ai_rules').upsert({
@@ -251,9 +277,6 @@ router.patch('/reconcile/:id', async (req, res) => {
         }, { onConflict: 'user_id,keyword', ignoreDuplicates: false });
       }
     }
-
-    const updatePayload = { is_reconciled: true };
-    if (category_id) updatePayload.category_id = category_id;
 
     const { data, error } = await supabase
       .from('transactions')

@@ -162,6 +162,34 @@ router.post('/', validate(transactionSchema), async (req, res) => {
 // PUT /api/transactions/:id
 router.put('/:id', async (req, res) => {
   try {
+    // Sync transaction TYPE and is_internal_transfer when category changes natively
+    if (req.body.category_id && !req.body.type) {
+      const { data: newCat } = await supabase.from('categories').select('nature, group_name').eq('id', req.body.category_id).single();
+      if (newCat) {
+        if (newCat.nature === 'income') {
+          req.body.type = 'income';
+          req.body.is_internal_transfer = false;
+        } else if (newCat.nature === 'expense') {
+          req.body.type = 'expense';
+          req.body.is_internal_transfer = false;
+        } else if (newCat.nature === 'transfer' || newCat.group_name?.includes('Transfer')) {
+          req.body.type = 'transfer';
+          req.body.is_internal_transfer = true;
+        }
+      }
+    }
+
+    // Force strict mathematical signs based on the TYPE (whether given by body or synced)
+    if (req.body.amount !== undefined) {
+      const isIncome = req.body.type === 'income' || (!req.body.type && req.body.category_id && req.body.is_internal_transfer === false); 
+      // Safe fallback: If we know the definitive type:
+      if (req.body.type === 'income') {
+        req.body.amount = Math.abs(parseFloat(req.body.amount));
+      } else if (req.body.type === 'expense') {
+        req.body.amount = -Math.abs(parseFloat(req.body.amount));
+      }
+    }
+
     const { data, error } = await supabase
       .from('transactions')
       .update(req.body)

@@ -31,8 +31,9 @@ export async function extractTransactionsFromPDF(buffer, categories = []) {
   const cleanedText = preprocessBankText(rawNormalized);
 
   // Step 3: Split into chunks safely with overlap
-  // 8b-instant has 500k TPD, 3000 chars limit (prevents output token exhaustion entirely)
-  const chunks = splitIntoChunksSafely(cleanedText, 3000);
+  // 8b-instant: chunks menores (2250 chars) garantem que o output NUNCA estoure o max_tokens
+  // Com 2250 chars → ~25 transações por chunk → ~3000 output tokens (seguro com max_tokens: 3500)
+  const chunks = splitIntoChunksSafely(cleanedText, 2250);
 
   // Step 4: Send each chunk to AI for structured extraction sequentially with a delay
   let allTransactions = [];
@@ -166,19 +167,13 @@ function splitIntoChunksSafely(text, maxChars) {
 }
 
 async function extractWithAI(textChunk, categories = []) {
-  const apiKey = process.env.AI_API_KEY;
-  if (!apiKey) {
-    console.warn('⚠️ AI API key not configured — cannot extract PDF transactions.');
-    return [];
+  const geminiKey = process.env.GEMINI_API_KEY;
+  const groqKey = process.env.AI_API_KEY;
+  
+  if (!geminiKey && !groqKey) {
+    console.warn('⚠️ No AI API keys configured — cannot extract PDF transactions.');
+    return { titular: null, transactions: [] };
   }
-
-  const provider = process.env.AI_PROVIDER || 'groq';
-  const baseUrls = {
-    groq: 'https://api.groq.com/openai/v1',
-    together: 'https://api.together.xyz/v1',
-  };
-  const baseUrl = baseUrls[provider] || baseUrls.groq;
-  const model = process.env.AI_MODEL_EXTRACTION || 'llama-3.1-8b-instant';
 
   const catRule = categories && categories.length > 0
     ? `6. A "categoria" da transação DEVE ser EXATAMENTE uma da lista abaixo, a que mais fizer sentido. Se nenhuma se encaixar, coloque "Outros".\nLISTA DE CATEGORIAS:\n[${categories.join(', ')}]`
@@ -209,13 +204,73 @@ ${catRule}
 
   const userMessage = `Extraia TODAS as transações e as formate na chave "t" como um array de listas (Data, Descrição, Valor Float e Categoria).\n\n--- EXTRATO ---\n${textChunk}\n--- FIM ---`;
 
-  const makeRequest = async (retries = 5, delay = 5000) => {
+  // ─── Gemini Flash Call ──────────────────────────────────────────────────────
+  async function callGeminiExtraction(retries = 3, delay = 4000) {
+    if (!geminiKey) return null; // Skip if not configured
+    
+    const model = process.env.AI_MODEL_EXTRACTION_GEMINI || 'gemini-2.5-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+          generationConfig: {
+            temperature: 0.05,
+            maxOutputTokens: 4096,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        if (response.status === 429 && retries > 0) {
+          // Gemini rate limit — wait and retry
+          const waitSec = Math.min(delay / 1000, 60);
+          console.warn(`⏳ Gemini Rate Limit (429). Aguardando ${waitSec.toFixed(0)}s... (${retries - 1} retries restantes)`);
+          await new Promise(r => setTimeout(r, delay));
+          return callGeminiExtraction(retries - 1, delay * 2);
+        }
+        console.warn(`⚠️ Gemini extraction error (${response.status}):`, errText.substring(0, 200));
+        return null; // Signal to fall back to Groq
+      }
+
+      const data = await response.json();
+      const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const tokens = (data.usageMetadata?.promptTokenCount || 0) + (data.usageMetadata?.candidatesTokenCount || 0);
+      
+      if (!content) return null;
+
+      return { content, tokens, provider: 'Gemini Flash' };
+    } catch (err) {
+      console.warn(`⚠️ Gemini request failed: ${err.message}`);
+      if (retries > 0) {
+        await new Promise(r => setTimeout(r, delay));
+        return callGeminiExtraction(retries - 1, delay * 1.5);
+      }
+      return null;
+    }
+  }
+
+  // ─── Groq/OpenAI-compatible Call (Fallback) ────────────────────────────────
+  async function callGroqExtraction(retries = 5, delay = 5000) {
+    if (!groqKey) return null;
+
+    const provider = process.env.AI_PROVIDER || 'groq';
+    const baseUrls = { groq: 'https://api.groq.com/openai/v1', together: 'https://api.together.xyz/v1' };
+    const baseUrl = baseUrls[provider] || baseUrls.groq;
+    const model = process.env.AI_MODEL_EXTRACTION || 'llama-3.1-8b-instant';
+
     try {
       const response = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${groqKey}`,
         },
         body: JSON.stringify({
           model,
@@ -224,140 +279,112 @@ ${catRule}
             { role: 'user', content: userMessage },
           ],
           temperature: 0.05,
-          max_tokens: 2000, // Enough for ~40 transactions per chunk
+          max_tokens: 3500,
           response_format: { type: 'json_object' },
         }),
       });
 
       if (!response.ok) {
         const errText = await response.text();
-
-        // Dynamic Rate Limit parsing (handles both "Xs" and "XmYs" formats)
         if (response.status === 429 && retries > 0) {
           let dynamicDelay = delay;
-          // Parse "try again in 27m26.784s" or "try again in 9.7s"
           const minMatch = errText.match(/in (\d+)m([\d.]+)s/);
           const secMatch = errText.match(/in ([\d.]+)s/);
-          if (minMatch) {
-            const totalSec = parseInt(minMatch[1]) * 60 + parseFloat(minMatch[2]) + 2;
-            dynamicDelay = totalSec * 1000;
-          } else if (secMatch && secMatch[1]) {
-            dynamicDelay = (parseFloat(secMatch[1]) + 2) * 1000;
-          }
-          console.warn(`⏳ AI Rate limite atingido (429). Aguardando ${(dynamicDelay / 1000).toFixed(1)}s para tentar novamente (${retries - 1} retries restantes)...`);
-          await new Promise(resolve => setTimeout(resolve, Math.max(dynamicDelay, 3000)));
-          return makeRequest(retries - 1, delay * 1.5);
+          if (minMatch) dynamicDelay = (parseInt(minMatch[1]) * 60 + parseFloat(minMatch[2]) + 2) * 1000;
+          else if (secMatch && secMatch[1]) dynamicDelay = (parseFloat(secMatch[1]) + 2) * 1000;
+          console.warn(`⏳ Groq Rate Limit (429). Aguardando ${(dynamicDelay / 1000).toFixed(1)}s... (${retries - 1} retries restantes)`);
+          await new Promise(r => setTimeout(r, Math.max(dynamicDelay, 3000)));
+          return callGroqExtraction(retries - 1, delay * 1.5);
         }
-
-        console.error(`AI extraction error (${response.status}):`, errText);
-        return { titular: null, transactions: [] };
+        console.error(`Groq extraction error (${response.status}):`, errText.substring(0, 200));
+        return null;
       }
 
       const data = await response.json();
       const content = data.choices?.[0]?.message?.content;
-
-      if (!content) {
-        console.warn('AI returned empty content for PDF extraction');
-        return { titular: null, transactions: [] };
-      }
-
-      const parsed = JSON.parse(content);
-      const titular = parsed.titular || null;
-      
-      // Decodificando o JSON minitupla de volta para objetos formatados
-      const rawTuples = parsed.t || [];
-      const transacoes = rawTuples.map(item => {
-        return {
-          data: item[0] || '',
-          descricao: item[1] || '',
-          valor: item[2] || 0,
-          categoria: item[3] || 'Outros'
-        };
-      });
-
-      console.log(`🤖 AI extracted ${transacoes.length} transactions (tokens: ${data.usage?.total_tokens || '?'}) via Tuple Compression`);
-
-      const formattedTransacoes = transacoes.map(t => {
-        let amountParsed = typeof t.valor === 'number' ? t.valor : parseFloat(String(t.valor).replace(',', '.'));
-        if (isNaN(amountParsed)) amountParsed = 0;
-
-        const descriptionStr = t.descricao || t.description || '';
-        const descLower = descriptionStr.toLowerCase();
-        
-        // --- VALIDAÇÃO SEMÂNTICA DE NATUREZA (Força Bruta por Palavras-Chave) ---
-        // O valor chega como número da IA. Primeiro pegamos o absoluto.
-        // Depois forçamos o sinal baseado EXCLUSIVAMENTE na descrição.
-        const absAmount = Math.abs(amountParsed);
-        let finalAmount = isNaN(absAmount) ? 0 : absAmount;
-
-        // Keywords de ENTRADA (dinheiro entra na conta = valor POSITIVO)
-        // Ordem importa: 'devolvid' deve vir antes porque 'pix enviado devolvido' é uma ENTRADA
-        const entradaKeywords = [
-          'devolvid',           // estorno/devolução = entrada
-          'recebid',            // pix recebido, transferência recebida
-          'recebida',           // transferencia recebida
-          'resgate',            // resgate de investimento
-          'credito domicilio',  // crédito de cartão
-          'credito cartao',     // variação
-          'remuneração',        // rendimento
-          'remuneracao',        // sem acento
-          'rendimento',         // rendimento de investimento
-          'salário',            // salário
-          'salario',            // sem acento
-          'estorno',            // estorno
-          'transferencia recebida', // transferência recebida
-        ];
-
-        // Keywords de SAÍDA (dinheiro sai da conta = valor NEGATIVO)
-        const saidaKeywords = [
-          'compra no debito',   // compra no débito
-          'compra no débito',   // com acento
-          'pagamento efetuado', // pagamento de boleto/fatura
-          'pagamento',          // pagamento genérico
-          'pix enviado:',       // pix enviado (com dois pontos para não pegar 'devolvido')
-          'aplicacao',          // aplicação de investimento
-          'aplicação',          // com acento
-          'saque',              // saque em dinheiro
-          'tarifa',             // tarifa bancária
-          'iof',                // IOF
-        ];
-
-        // Prioridade 1: Verifica entradas primeiro (devolvido > enviado)
-        let isEntrada = entradaKeywords.some(kw => descLower.includes(kw));
-        let isSaida = !isEntrada && saidaKeywords.some(kw => descLower.includes(kw));
-
-        if (isEntrada) {
-          finalAmount = absAmount; // Positivo
-        } else if (isSaida) {
-          finalAmount = -absAmount; // Negativo
-        } else {
-          // Fallback: confia no sinal original da IA
-          finalAmount = amountParsed;
-        }
-        // -----------------------------------------------------------------------
-
-        return {
-          date: t.data || t.date,
-          description: descriptionStr,
-          amount: isNaN(finalAmount) ? 0 : finalAmount,
-          category: t.categoria || t.category || null,
-        };
-      });
-
-      return { titular, transactions: formattedTransacoes };
-
+      if (!content) return null;
+      return { content, tokens: data.usage?.total_tokens || 0, provider: 'Groq' };
     } catch (err) {
       if (retries > 0) {
-        console.warn(`⏳ AI Request falhou: ${err.message}. Retentando...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return makeRequest(retries - 1, delay * 1.5);
+        console.warn(`⏳ Groq Request falhou: ${err.message}. Retentando...`);
+        await new Promise(r => setTimeout(r, delay));
+        return callGroqExtraction(retries - 1, delay * 1.5);
       }
-      console.error('PDF AI extraction completely failed:', err.message);
-      return { titular: null, transactions: [] };
+      return null;
     }
-  };
+  }
 
-  return makeRequest();
+  // ─── Execute: Try Gemini first, then Groq ──────────────────────────────────
+  let result = await callGeminiExtraction();
+  
+  if (!result) {
+    if (geminiKey) console.warn('⚠️ Gemini falhou para este chunk. Tentando Groq como fallback...');
+    result = await callGroqExtraction();
+  }
+
+  if (!result || !result.content) {
+    console.error('❌ Both AI providers failed for this chunk.');
+    return { titular: null, transactions: [] };
+  }
+
+  // ─── Parse the JSON response (same for both providers) ─────────────────────
+  try {
+    const parsed = JSON.parse(result.content);
+    const titular = parsed.titular || null;
+    
+    const rawTuples = parsed.t || [];
+    const transacoes = rawTuples.map(item => ({
+      data: item[0] || '',
+      descricao: item[1] || '',
+      valor: item[2] || 0,
+      categoria: item[3] || 'Outros',
+    }));
+
+    console.log(`🤖 AI extracted ${transacoes.length} transactions (tokens: ${result.tokens}) via ${result.provider}`);
+
+    // ─── Semantic sign validation (same logic as before) ───────────────────
+    const formattedTransacoes = transacoes.map(t => {
+      let amountParsed = typeof t.valor === 'number' ? t.valor : parseFloat(String(t.valor).replace(',', '.'));
+      if (isNaN(amountParsed)) amountParsed = 0;
+
+      const descriptionStr = t.descricao || t.description || '';
+      const descLower = descriptionStr.toLowerCase();
+      const absAmount = Math.abs(amountParsed);
+      let finalAmount = isNaN(absAmount) ? 0 : absAmount;
+
+      const entradaKeywords = [
+        'devolvid', 'recebid', 'recebida', 'resgate',
+        'credito domicilio', 'credito cartao',
+        'remuneração', 'remuneracao', 'rendimento',
+        'salário', 'salario', 'estorno', 'transferencia recebida',
+      ];
+      const saidaKeywords = [
+        'compra no debito', 'compra no débito',
+        'pagamento efetuado', 'pagamento',
+        'pix enviado:', 'aplicacao', 'aplicação',
+        'saque', 'tarifa', 'iof',
+      ];
+
+      const isEntrada = entradaKeywords.some(kw => descLower.includes(kw));
+      const isSaida = !isEntrada && saidaKeywords.some(kw => descLower.includes(kw));
+
+      if (isEntrada) finalAmount = absAmount;
+      else if (isSaida) finalAmount = -absAmount;
+      else finalAmount = amountParsed;
+
+      return {
+        date: t.data || t.date,
+        description: descriptionStr,
+        amount: isNaN(finalAmount) ? 0 : finalAmount,
+        category: t.categoria || t.category || null,
+      };
+    });
+
+    return { titular, transactions: formattedTransacoes };
+  } catch (parseErr) {
+    console.error('❌ Failed to parse AI response JSON:', parseErr.message);
+    return { titular: null, transactions: [] };
+  }
 }
 
 /**

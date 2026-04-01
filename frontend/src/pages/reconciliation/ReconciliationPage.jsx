@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/format';
-import { Check, X, ChevronDown, AlertTriangle, Zap, CheckCircle2, RefreshCw, ArrowRight } from 'lucide-react';
+import { Check, X, ChevronDown, AlertTriangle, Zap, CheckCircle2, RefreshCw, ArrowRight, Trash2, Edit2 } from 'lucide-react';
 
 const CONFIDENCE_LABEL = (c) => {
   if (c === null || c === undefined) return { label: 'Sem IA', color: 'var(--text-muted)', icon: '🔵' };
@@ -17,7 +17,7 @@ export default function ReconciliationPage() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState({}); // {id: true}
   const [editingId, setEditingId] = useState(null);
-  const [editCatId, setEditCatId] = useState('');
+  const [editForm, setEditForm] = useState({ description: '', amount: 0, category_id: '' });
   const [activeTab, setActiveTab] = useState('pending');
   const [filter, setFilter] = useState('all'); // all | low | medium | high
 
@@ -52,16 +52,51 @@ export default function ReconciliationPage() {
     finally { setProcessing(p => ({ ...p, [id]: false })); }
   };
 
-  // ── Save a corrected category and approve ─────────────────────────────────
+  // ── Save full correction (description, amount, category) and approve ──────
   const saveCorrection = async (id) => {
-    if (!editCatId) return;
     setProcessing(p => ({ ...p, [id]: true }));
     try {
-      await api.reconcileTransaction(id, { category_id: editCatId, approved: true });
+      // First update description + amount via transactions PUT
+      const updateData = {};
+      const original = pending.find(t => t.id === id);
+      if (editForm.description && editForm.description !== original?.description) updateData.description = editForm.description;
+      if (editForm.amount !== undefined && editForm.amount !== original?.amount) updateData.amount = editForm.amount;
+      if (editForm.category_id) updateData.category_id = editForm.category_id;
+      
+      if (Object.keys(updateData).length > 0 && !updateData.category_id) {
+        // Only non-category fields changed — update via PUT then approve
+        await api.updateTransaction(id, updateData);
+        await api.reconcileTransaction(id, { approved: true });
+      } else {
+        // Category changed (or everything) — reconcile handles type sync
+        await api.reconcileTransaction(id, { ...updateData, approved: true });
+      }
+      
       setPending(prev => prev.filter(t => t.id !== id));
       setEditingId(null);
     } catch (err) { alert(`Erro: ${err.message}`); }
     finally { setProcessing(p => ({ ...p, [id]: false })); }
+  };
+
+  // ── Delete a transaction ──────────────────────────────────────────────────
+  const deleteTransaction = async (id) => {
+    if (!confirm('Tem certeza que deseja excluir esta transação?')) return;
+    setProcessing(p => ({ ...p, [id]: true }));
+    try {
+      await api.deleteTransaction(id);
+      setPending(prev => prev.filter(t => t.id !== id));
+    } catch (err) { alert(`Erro ao excluir: ${err.message}`); }
+    finally { setProcessing(p => ({ ...p, [id]: false })); }
+  };
+
+  // ── Start editing a transaction ───────────────────────────────────────────
+  const startEditing = (tx) => {
+    setEditingId(tx.id);
+    setEditForm({
+      description: tx.description || '',
+      amount: parseFloat(tx.amount) || 0,
+      category_id: tx.category_id || '',
+    });
   };
 
   // ── Approve all at once ───────────────────────────────────────────────────
@@ -183,6 +218,7 @@ export default function ReconciliationPage() {
                       transition: 'all 0.2s ease',
                     }}
                   >
+                    {/* Header row: description, amount, confidence, quick actions */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
                       {/* Date + Description */}
                       <div style={{ flex: 1, minWidth: 200 }}>
@@ -193,50 +229,21 @@ export default function ReconciliationPage() {
                       </div>
 
                       {/* Amount */}
-                      <div style={{ fontWeight: 700, fontSize: '1rem', color: tx.type === 'income' ? 'var(--color-success)' : 'var(--color-danger)', minWidth: 90, textAlign: 'right' }}>
-                        {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount))}
+                      <div style={{ fontWeight: 700, fontSize: '1rem', color: tx.amount >= 0 ? 'var(--color-success)' : 'var(--color-danger)', minWidth: 90, textAlign: 'right' }}>
+                        {tx.amount >= 0 ? '+' : '-'}{formatCurrency(Math.abs(tx.amount))}
                       </div>
 
-                      {/* AI Category suggestion */}
-                      {isEditing ? (
-                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                          <select
-                            value={editCatId}
-                            onChange={e => setEditCatId(e.target.value)}
-                            style={{ fontSize: '0.85rem', padding: '0.35rem 0.6rem' }}
-                            autoFocus
-                          >
-                            <option value="">Selecionar categoria...</option>
-                            {categories.filter(c => !c.parent_id).map(parent => {
-                              const children = categories.filter(c => c.parent_id === parent.id);
-                              return children.length > 0 ? (
-                                <optgroup key={parent.id} label={`${parent.icon} ${parent.name}`}>
-                                  {children.map(child => (
-                                    <option key={child.id} value={child.id}>{child.icon} {child.name}</option>
-                                  ))}
-                                </optgroup>
-                              ) : (
-                                <option key={parent.id} value={parent.id}>{parent.icon} {parent.name}</option>
-                              );
-                            })}
-                          </select>
-                          <button className="btn btn-primary btn-sm" onClick={() => saveCorrection(tx.id)} disabled={!editCatId}>
-                            <Check size={14} /> Salvar
-                          </button>
-                          <button className="btn btn-ghost btn-sm" onClick={() => setEditingId(null)}>
-                            <X size={14} />
-                          </button>
-                        </div>
-                      ) : (
+                      {/* Category badge (click to open edit) */}
+                      {!isEditing && (
                         <button
-                          onClick={() => { setEditingId(tx.id); setEditCatId(tx.categories?.id || ''); }}
+                          onClick={() => startEditing(tx)}
                           style={{
                             display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
                             padding: '0.35rem 0.7rem', borderRadius: 'var(--border-radius-full)',
                             background: 'var(--bg-secondary)', border: `1px solid ${tx.categories?.color || 'var(--border-color)'}`,
                             cursor: 'pointer', fontSize: '0.82rem', fontWeight: 500,
                           }}
-                          title="Clique para corrigir a categoria"
+                          title="Clique para editar esta transação"
                         >
                           {tx.categories?.icon || '📦'} {tx.categories?.name || 'Sem categoria'}
                           <ChevronDown size={12} style={{ opacity: 0.5 }} />
@@ -262,9 +269,80 @@ export default function ReconciliationPage() {
                           >
                             <Check size={14} /> Aprovar
                           </button>
+                          <button
+                            onClick={() => startEditing(tx)}
+                            disabled={busy}
+                            title="Editar transação"
+                            style={{ background: 'none', border: '1px solid var(--border-color)', color: 'var(--text-muted)', padding: '0.3rem 0.5rem', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button
+                            onClick={() => deleteTransaction(tx.id)}
+                            disabled={busy}
+                            title="Excluir transação"
+                            style={{ background: 'none', border: '1px solid var(--color-danger)', color: 'var(--color-danger)', padding: '0.3rem 0.5rem', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.7 }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
                         </div>
                       )}
                     </div>
+
+                    {/* Expanded Edit Form */}
+                    {isEditing && (
+                      <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: '8px', display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end' }}>
+                        <div style={{ flex: '2 1 200px' }}>
+                          <label style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Descrição</label>
+                          <input
+                            type="text"
+                            value={editForm.description}
+                            onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))}
+                            style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.85rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--form-bg)', color: 'var(--text-primary)' }}
+                          />
+                        </div>
+                        <div style={{ flex: '0 1 120px' }}>
+                          <label style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Valor (R$)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={editForm.amount}
+                            onChange={e => setEditForm(f => ({ ...f, amount: parseFloat(e.target.value) || 0 }))}
+                            style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.85rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--form-bg)', color: 'var(--text-primary)' }}
+                          />
+                        </div>
+                        <div style={{ flex: '1 1 180px' }}>
+                          <label style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Categoria</label>
+                          <select
+                            value={editForm.category_id}
+                            onChange={e => setEditForm(f => ({ ...f, category_id: e.target.value }))}
+                            style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.85rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--form-bg)', color: 'var(--text-primary)' }}
+                          >
+                            <option value="">Manter categoria atual</option>
+                            {categories.filter(c => !c.parent_id).map(parent => {
+                              const children = categories.filter(c => c.parent_id === parent.id);
+                              return children.length > 0 ? (
+                                <optgroup key={parent.id} label={`${parent.icon} ${parent.name}`}>
+                                  {children.map(child => (
+                                    <option key={child.id} value={child.id}>{child.icon} {child.name}</option>
+                                  ))}
+                                </optgroup>
+                              ) : (
+                                <option key={parent.id} value={parent.id}>{parent.icon} {parent.name}</option>
+                              );
+                            })}
+                          </select>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button className="btn btn-primary btn-sm" onClick={() => saveCorrection(tx.id)} disabled={busy}>
+                            <Check size={14} /> Salvar e Aprovar
+                          </button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => setEditingId(null)}>
+                            <X size={14} /> Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}

@@ -2,35 +2,107 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// ─── Provider Configurations ────────────────────────────────────────────────
 const AI_PROVIDERS = {
   groq: {
     baseUrl: 'https://api.groq.com/openai/v1',
     defaultModel: 'llama-3.3-70b-versatile',
+    format: 'openai',
   },
   huggingface: {
     baseUrl: 'https://api-inference.huggingface.co/models',
     defaultModel: 'meta-llama/Llama-3.3-70B-Instruct',
+    format: 'openai',
   },
   together: {
     baseUrl: 'https://api.together.xyz/v1',
     defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+    format: 'openai',
+  },
+  gemini: {
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
+    defaultModel: 'gemini-2.5-flash',
+    format: 'gemini',
   },
 };
 
-const provider = process.env.AI_PROVIDER || 'groq';
-const config = AI_PROVIDERS[provider] || AI_PROVIDERS.groq;
+// ─── Determine primary + fallback providers ──────────────────────────────────
+const primaryProvider = process.env.AI_PROVIDER || 'groq';
+const fallbackProvider = process.env.AI_FALLBACK_PROVIDER || (primaryProvider === 'gemini' ? 'groq' : null);
 
-async function callAI(messages, options = {}) {
-  const apiKey = process.env.AI_API_KEY;
-  if (!apiKey) {
-    console.warn('⚠️  AI API key not configured. Returning mock response.');
-    return { content: 'IA não configurada. Configure a chave da API nas configurações.' };
+function getProviderConfig(providerName) {
+  return AI_PROVIDERS[providerName] || AI_PROVIDERS.groq;
+}
+
+// ─── Gemini Native API Call ──────────────────────────────────────────────────
+async function callGemini(messages, options = {}) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return { content: null, error: 'GEMINI_API_KEY not configured' };
+
+  const model = options.model || process.env.AI_MODEL_GEMINI || 'gemini-2.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+  // Convert OpenAI-style messages to Gemini format
+  const systemInstruction = messages.find(m => m.role === 'system')?.content || '';
+  const contents = messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }));
+
+  const body = {
+    systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
+    contents,
+    generationConfig: {
+      temperature: options.temperature || 0.3,
+      maxOutputTokens: options.maxTokens || 2048,
+      ...(options.json ? { responseMimeType: 'application/json' } : {}),
+    },
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      // Rate limit on Gemini
+      if (response.status === 429) {
+        throw new Error(`RATE_LIMIT: ${errText}`);
+      }
+      throw new Error(`Gemini API Error (${response.status}): ${errText}`);
+    }
+
+    const data = await response.json();
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    const usage = data.usageMetadata || {};
+
+    return {
+      content,
+      usage: {
+        prompt_tokens: usage.promptTokenCount || 0,
+        completion_tokens: usage.candidatesTokenCount || 0,
+        total_tokens: (usage.promptTokenCount || 0) + (usage.candidatesTokenCount || 0),
+      },
+    };
+  } catch (error) {
+    return { content: null, error: error.message };
   }
+}
 
+// ─── OpenAI-compatible API Call (Groq, Together, HuggingFace) ────────────────
+async function callOpenAICompatible(messages, options = {}, providerName = 'groq') {
+  const apiKey = process.env.AI_API_KEY;
+  if (!apiKey) return { content: null, error: 'AI_API_KEY not configured' };
+
+  const config = getProviderConfig(providerName);
   const model = options.model || process.env.AI_MODEL || config.defaultModel;
 
   try {
-    // All three providers are OpenAI-compatible
     const response = await fetch(`${config.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -57,9 +129,42 @@ async function callAI(messages, options = {}) {
       usage: data.usage,
     };
   } catch (error) {
-    console.error('AI Service Error:', error.message);
     return { content: null, error: error.message };
   }
+}
+
+// ─── Unified AI Call with Automatic Fallback ─────────────────────────────────
+async function callAI(messages, options = {}) {
+  let result;
+
+  // Try primary provider first
+  if (primaryProvider === 'gemini') {
+    result = await callGemini(messages, options);
+  } else {
+    result = await callOpenAICompatible(messages, options, primaryProvider);
+  }
+
+  // If primary failed and a fallback is configured, try it
+  if ((!result.content || result.error) && fallbackProvider) {
+    const errorMsg = result.error || 'empty response';
+    console.warn(`⚠️ Primary AI (${primaryProvider}) failed: ${errorMsg}. Falling back to ${fallbackProvider}...`);
+
+    if (fallbackProvider === 'gemini') {
+      result = await callGemini(messages, options);
+    } else {
+      result = await callOpenAICompatible(messages, options, fallbackProvider);
+    }
+
+    if (result.content) {
+      console.log(`✅ Fallback AI (${fallbackProvider}) succeeded.`);
+    }
+  }
+
+  if (!result.content && !result.error) {
+    return { content: 'IA não configurada. Configure a chave da API nas configurações.', error: null };
+  }
+
+  return result;
 }
 
 // ---- SPECIALIZED AI FUNCTIONS ----
@@ -195,5 +300,8 @@ Responda de forma objetiva e personalizada. Use emojis com modaração. Sempre e
 
   return result.content || 'Desculpe, não consegui processar sua mensagem. Tente novamente! 😊';
 }
+
+// Export the unified callAI for potential reuse
+export { callAI, callGemini };
 
 export default { categorizeTransaction, generateInsights, generateBudget, calculateHealthScore, chatWithAssistant };
