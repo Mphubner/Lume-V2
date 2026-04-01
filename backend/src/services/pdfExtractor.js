@@ -88,7 +88,6 @@ function preprocessBankText(text) {
     /Dias\s+úteis\s+das\s+\d{2}h\s+às\s+\d{2}h/gi,
     /^\s*\d+\s+de\s+\d+\s*$/gm,
     /Saldo\s+ao\s+final\s+do\s+dia[:\s]+[^\n]+/gi,
-    // Específicos de Bancos Tradicionais e Digitais (Limpeza Categórica)
     /Fale\s+com\s+a\s+gente/gi,
     /Deficiência\s+de\s+fala\s+e\s+audição[^\n]*/gi,
     /Solicitado\s+em[:\s]+[^\n]+/gi,
@@ -104,7 +103,33 @@ function preprocessBankText(text) {
   for (const pattern of noisePatterns) {
     cleaned = cleaned.replace(pattern, '');
   }
-  return cleaned.split('\n').map(line => line.trim()).filter(line => line.length > 0).join('\n');
+
+  // --- DECONTAMINAÇÃO DE LINHAS (pdf-parse column bleeding fix) ---
+  // O pdf-parse do Inter cola o SALDO de conta (ex: R$ 884,52) logo após o VALOR
+  // da transação, e às vezes cola fragmentos de transações de colunas adjacentes.
+  // Formato típico: 'Pix enviado: "Cp :60746948-ZAMP SA"-R$ 87,70R$ 884,52'
+  // O que queremos manter: 'Pix enviado: "Cp :60746948-ZAMP SA" -R$ 87,70'
+  // Regra: após o PRIMEIRO valor R$ (que é a transação), remover tudo que sobra.
+  const decontaminatedLines = cleaned.split('\n').map(line => {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) return '';
+
+    // Detect transaction lines (start with Pix, Compra, Pagamento, Credito, Aplicacao, etc)
+    const isTxLine = /^(Pix|Compra|Pagamento|Credito|Crédito|Transfer|Aplicacao|Aplicação|Resgate|Saque|Tarifa|IOF|Rendimento|Boleto|Ted |Doc )/i.test(trimmed);
+    if (!isTxLine) return trimmed;
+
+    // Find the FIRST R$ value (the transaction amount)
+    // Pattern: -R$ 87,70 or R$ 2.800,00 or -R$ 1.234,56
+    const firstValueMatch = trimmed.match(/-?R\$\s*[\d.,]+/);
+    if (!firstValueMatch) return trimmed;
+
+    // Keep everything up to and including the first R$ value
+    const endOfFirstValue = firstValueMatch.index + firstValueMatch[0].length;
+    const cleanLine = trimmed.substring(0, endOfFirstValue);
+    return cleanLine;
+  });
+
+  return decontaminatedLines.filter(line => line.length > 0).join('\n');
 }
 
 /**
@@ -155,16 +180,18 @@ async function extractWithAI(textChunk, categories = []) {
     ? `6. A "categoria" da transação DEVE ser EXATAMENTE uma da lista abaixo, a que mais fizer sentido. Se nenhuma se encaixar, coloque "Outros".\nLISTA DE CATEGORIAS:\n[${categories.join(', ')}]`
     : `6. Estime uma "categoria" financeira básica.`;
 
-  const systemPrompt = `Você é um extrator financeiro rigoroso de extratos brasileiros.
-Seu objetivo é extrair transações e montar um JSON perfeito.
+  const systemPrompt = `Você é um extrator financeiro rigoroso de extratos bancários brasileiros.
+Seu objetivo é extrair TODAS as transações e montar um JSON perfeito. NÃO PULE nenhuma transação.
 
 ### Regras:
 1. Normalize datas para DD/MM/AAAA.
 2. NEGATIVO para saídas/débitos/pagamentos (-R$), POSITIVO para entradas/créditos/recebimentos (+R$ ou R$).
-3. Ignore linhas de "Saldo total", "Saldo disponivel" ou "Saldo por transação". Extraia APENAS lançamentos de conta.
+3. Ignore linhas de "Saldo total", "Saldo disponivel" ou "Saldo por transação". Extraia APENAS lançamentos individuais.
 4. Identifique o TITULAR do extrato no cabeçalho.
-5. CONTEXTO DE DATA: Em alguns bancos (ex: Inter, PicPay), a data aparece como um título ANTES das transações (ex: "13 de Janeiro de 2026 Saldo do dia: R$ 2.724,90"). Aplique essa data a todas as transações abaixo dela até encontrar a próxima data.
+5. CONTEXTO DE DATA: A data aparece como título (ex: "13 de Janeiro de 2026 Saldo do dia: R$ 2.724,90"). Aplique essa data a todas as transações abaixo dela até a próxima data.
 ${catRule}
+7. IMPORTANTE: Cada linha começando com "Pix", "Compra", "Pagamento", "Credito", "Aplicacao", "Resgate", "Transferência", "Tarifa", "IOF" ou "Saque" é UMA transação. O valor vem após o último R$ da linha. Extraia TODAS sem pular nenhuma.
+8. Se houver transações idênticas (mesma data, descrição e valor), inclua TODAS elas. Não deduplicar.
 
 ### Formato de Saída (JSON estrito):
 {
@@ -252,40 +279,57 @@ ${textChunk}
         const descriptionStr = t.descricao || t.description || '';
         const descLower = descriptionStr.toLowerCase();
         
-        // --- DUPLA VALIDAÇÃO SEMÂNTICA DE NATUREZA (Baseada na Descrição do Extrato) ---
-        // Pega o valor lido como absoluto para ignorar sinais pendurados no texto mal quebrado
-        let finalAmount = Math.abs(amountParsed);
-        if (isNaN(finalAmount)) finalAmount = 0;
+        // --- VALIDAÇÃO SEMÂNTICA DE NATUREZA (Força Bruta por Palavras-Chave) ---
+        // O valor chega como número da IA. Primeiro pegamos o absoluto.
+        // Depois forçamos o sinal baseado EXCLUSIVAMENTE na descrição.
+        const absAmount = Math.abs(amountParsed);
+        let finalAmount = isNaN(absAmount) ? 0 : absAmount;
 
-        // Entradas Forçadas (+X)
-        if (
-          descLower.includes('recebid') || 
-          descLower.includes('resgate') || 
-          descLower.includes('devolvid') || 
-          descLower.includes('crédito') || 
-          descLower.includes('credito') || 
-          descLower.includes('remuneração') || 
-          descLower.includes('salário') || 
-          descLower.includes('salario')
-        ) {
-          finalAmount = finalAmount * 1; 
-        } 
-        // Saídas Forçadas (-X)
-        else if (
-          descLower.includes('enviad') || 
-          descLower.includes('compra') || 
-          descLower.includes('pagamento') || 
-          descLower.includes('aplicacao') || 
-          descLower.includes('aplicação') || 
-          descLower.includes('saque')
-        ) {
-          finalAmount = finalAmount * -1;
-        }
-        // Fallback: se não tiver trigger verbal, mantém o original enviado pela IA
-        else {
+        // Keywords de ENTRADA (dinheiro entra na conta = valor POSITIVO)
+        // Ordem importa: 'devolvid' deve vir antes porque 'pix enviado devolvido' é uma ENTRADA
+        const entradaKeywords = [
+          'devolvid',           // estorno/devolução = entrada
+          'recebid',            // pix recebido, transferência recebida
+          'recebida',           // transferencia recebida
+          'resgate',            // resgate de investimento
+          'credito domicilio',  // crédito de cartão
+          'credito cartao',     // variação
+          'remuneração',        // rendimento
+          'remuneracao',        // sem acento
+          'rendimento',         // rendimento de investimento
+          'salário',            // salário
+          'salario',            // sem acento
+          'estorno',            // estorno
+          'transferencia recebida', // transferência recebida
+        ];
+
+        // Keywords de SAÍDA (dinheiro sai da conta = valor NEGATIVO)
+        const saidaKeywords = [
+          'compra no debito',   // compra no débito
+          'compra no débito',   // com acento
+          'pagamento efetuado', // pagamento de boleto/fatura
+          'pagamento',          // pagamento genérico
+          'pix enviado:',       // pix enviado (com dois pontos para não pegar 'devolvido')
+          'aplicacao',          // aplicação de investimento
+          'aplicação',          // com acento
+          'saque',              // saque em dinheiro
+          'tarifa',             // tarifa bancária
+          'iof',                // IOF
+        ];
+
+        // Prioridade 1: Verifica entradas primeiro (devolvido > enviado)
+        let isEntrada = entradaKeywords.some(kw => descLower.includes(kw));
+        let isSaida = !isEntrada && saidaKeywords.some(kw => descLower.includes(kw));
+
+        if (isEntrada) {
+          finalAmount = absAmount; // Positivo
+        } else if (isSaida) {
+          finalAmount = -absAmount; // Negativo
+        } else {
+          // Fallback: confia no sinal original da IA
           finalAmount = amountParsed;
         }
-        // -------------------------------------------------------------------------------
+        // -----------------------------------------------------------------------
 
         return {
           date: t.data || t.date,
@@ -312,15 +356,12 @@ ${textChunk}
 }
 
 /**
- * Post-process: deduplicate, validate, and normalize
- * Uses a counter-based key to allow max 2 identical transactions 
- * (real-world: same store, same day, same value can happen once or twice)
- * but blocks 3+ which are almost certainly chunk-overlap artifacts.
+ * Post-process: validate and filter non-transaction entries.
+ * Deduplication is handled by the batchHashes Set in import.js,
+ * so here we only filter invalid data, NOT legitimate identical transactions.
  */
 function postProcessTransactions(transactions) {
-  const seen = new Map(); // key -> count
   const valid = [];
-  const MAX_IDENTICAL = 2; // Allow up to 2 identical transactions (realistic)
 
   for (const t of transactions) {
     if (!t.description || t.description.length < 2) continue;
@@ -332,15 +373,6 @@ function postProcessTransactions(transactions) {
       descLower.includes('s/anterior') || descLower.includes('saldo inicial')) {
       continue;
     }
-
-    // Normalize the key: trim description, round amount to 2 decimals
-    const normalizedDesc = t.description.trim().toLowerCase();
-    const normalizedAmount = Math.round(t.amount * 100) / 100;
-    const key = `${t.date}|${normalizedDesc}|${normalizedAmount}`;
-    
-    const count = seen.get(key) || 0;
-    if (count >= MAX_IDENTICAL) continue; // Block 3rd+ identical
-    seen.set(key, count + 1);
 
     valid.push(t);
   }

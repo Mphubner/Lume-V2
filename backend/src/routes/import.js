@@ -102,8 +102,17 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
         aiConfidence = 1.0; // matched by rule or exact name — high confidence
       }
 
-      // Regra Lógica: Identificar transferências para não impactar Receita/Despesa (exceto salários)
-      const isTransfer = (descLower.includes('transferencia') || descLower.includes('ted ') || descLower.includes('pix env') || descLower.includes('pix rec')) && !descLower.includes('salario');
+      // Regra Lógica: Tipo de transação baseado em keywords da descrição
+      const entradaKw = ['devolvid', 'recebid', 'recebida', 'resgate', 'credito domicilio', 'credito cartao', 'remuneração', 'remuneracao', 'rendimento', 'salário', 'salario', 'estorno', 'transferencia recebida'];
+      const saidaKw = ['compra no debito', 'compra no débito', 'pagamento', 'pix enviado:', 'aplicacao', 'aplicação', 'saque', 'tarifa', 'iof'];
+      const isEntrada = entradaKw.some(kw => descLower.includes(kw));
+      const isSaida = !isEntrada && saidaKw.some(kw => descLower.includes(kw));
+      const isTransfer = (descLower.includes('transferencia') || descLower.includes('pix env') || descLower.includes('pix rec')) && !descLower.includes('salario');
+
+      // Garantir que o amount esteja com o sinal correto antes de inserir
+      let correctedAmount = raw.amount;
+      if (isEntrada && correctedAmount < 0) correctedAmount = Math.abs(correctedAmount);
+      if (isSaida && correctedAmount > 0) correctedAmount = -Math.abs(correctedAmount);
 
       try {
         await supabase.from('transactions').insert({
@@ -113,8 +122,8 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
           category_id: categoryId,
           description: raw.description,
           raw_description: raw.description,
-          amount: raw.amount,
-          type: isTransfer ? 'transfer' : (raw.amount >= 0 ? 'income' : 'expense'),
+          amount: correctedAmount,
+          type: isTransfer ? 'transfer' : (correctedAmount >= 0 ? 'income' : 'expense'),
           is_internal_transfer: isTransfer,
           date: normalizedDate,
           origin: 'import',
