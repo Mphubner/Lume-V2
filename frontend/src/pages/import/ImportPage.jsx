@@ -33,8 +33,8 @@ export default function ImportPage() {
   const fetchDropdowns = async () => {
     try {
       const [accs, fam] = await Promise.all([ api.getAccounts(), api.getFamily() ]);
-      setAccounts(accs);
-      setFamily(fam);
+      setAccounts(Array.isArray(accs) ? accs : []);
+      setFamily(Array.isArray(fam) ? fam : fam?.members || []);
     } catch (e) { console.error(e); }
   };
 

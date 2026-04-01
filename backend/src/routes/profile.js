@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth.js';
 import { supabase } from '../config/supabase.js';
+import { logAudit } from './audit.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -24,6 +25,7 @@ router.put('/', async (req, res) => {
 
     const { data, error } = await supabase.from('profiles').update(updates).eq('id', req.user.id).select().single();
     if (error) throw error;
+    logAudit(req.user.id, 'profile_updated', `Perfil atualizado: ${Object.keys(updates).join(', ')}`, '👤');
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: 'Erro ao atualizar perfil' });

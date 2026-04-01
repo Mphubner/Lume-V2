@@ -164,6 +164,13 @@ select {
 .hidden { display: none; }
 .relative { position: relative; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flex-1 { flex: 1; }
+
+/* ---- Grid System ---- */
+.grid { display: grid; gap: 1rem; }
+.grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
 
 /* ---- Layout ---- */
 .app-layout {
@@ -1836,6 +1843,24 @@ input:focus:not(:focus-visible) {
     -webkit-overflow-scrolling: touch;
     white-space: nowrap;
     border-radius: var(--border-radius-sm);
+  }
+
+  /* Wrap any data table in a scrollable container */
+  table, .data-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+  }
+
+  /* Prevent horizontal overflow on page */
+  .main-content {
+    overflow-x: hidden;
+  }
+
+  /* Import page two-column layout → stack */
+  .grid.grid-2[style*="gridTemplateColumns"] {
+    grid-template-columns: 1fr !important;
   }
 }
 

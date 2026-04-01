@@ -22,6 +22,7 @@ import notificationsRouter from './routes/notifications.js';
 import pluggyRouter from './routes/pluggy.js';
 import familyRouter from './routes/family.js';
 import reserveRouter from './routes/reserve.js';
+import auditRouter from './routes/audit.js';
 dotenv.config();
 
 const app = express();
@@ -85,6 +86,7 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/pluggy', pluggyRouter);
 app.use('/api/family', familyRouter);
 app.use('/api/reserve', reserveRouter);
+app.use('/api/audit', auditRouter);
 
 // Error handler
 app.use((err, req, res, next) => {

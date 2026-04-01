@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { supabase } from '../config/supabase.js';
+import { logAudit } from './audit.js';
 
 const router = Router();
 
@@ -141,7 +142,8 @@ router.post('/', validate(transactionSchema), async (req, res) => {
       .select()
       .single();
     if (error) throw error;
-    flagInsightRecalc(req.user.id); // Fire-and-forget cache invalidation
+    flagInsightRecalc(req.user.id);
+    logAudit(req.user.id, 'transaction_created', `Transação criada: ${req.body.description || 'sem descrição'}`, '➕');
     res.status(201).json(data);
   } catch (err) {
     console.error('POST /transactions error:', err);
@@ -161,6 +163,7 @@ router.put('/:id', async (req, res) => {
       .single();
     if (error) throw error;
     flagInsightRecalc(req.user.id);
+    logAudit(req.user.id, 'transaction_updated', `Transação atualizada: ${data.description || req.params.id}`, '✏️');
     res.json(data);
   } catch (err) {
     console.error('PUT /transactions error:', err);
@@ -178,6 +181,7 @@ router.delete('/:id', async (req, res) => {
       .eq('user_id', req.user.id);
     if (error) throw error;
     flagInsightRecalc(req.user.id);
+    logAudit(req.user.id, 'transaction_deleted', `Transação excluída: ${req.params.id}`, '🗑️');
     res.json({ success: true });
   } catch (err) {
     console.error('DELETE /transactions error:', err);

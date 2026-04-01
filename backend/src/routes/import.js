@@ -4,6 +4,7 @@ import { supabase } from '../config/supabase.js';
 import multer from 'multer';
 import { categorizeTransaction } from '../services/aiService.js';
 import { extractTransactionsFromPDF } from '../services/pdfExtractor.js';
+import { logAudit } from './audit.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -125,6 +126,8 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
       duplicates_skipped: duplicates,
       status: 'completed',
     }).eq('id', importRecordId);
+
+    logAudit(user.id, 'import_completed', `Importação concluída: ${imported} transações importadas, ${duplicates} duplicatas ignoradas`, '📤');
 
   } catch (err) {
     console.error('Background import processing error:', err);

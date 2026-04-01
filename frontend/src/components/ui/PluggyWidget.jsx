@@ -7,28 +7,27 @@ export default function PluggyWidget({ onConnectSuccess }) {
   const [errorInfo, setErrorInfo] = useState('');
   const [scriptLoaded, setScriptLoaded] = useState(false);
 
-  // Load the Pluggy Connect secure widget dynamically
-  useEffect(() => {
+  // Load the Pluggy Connect secure widget on-demand (not on mount) to avoid 404 crash
+  const loadScript = useCallback(() => {
     if (window.PluggyConnect) {
       setScriptLoaded(true);
-      return;
+      return Promise.resolve();
     }
 
-    const script = document.createElement('script');
-    script.src = 'https://cdn.pluggy.ai/pluggy-connect/v1/pluggy-connect.js';
-    script.async = true;
-    script.onload = () => setScriptLoaded(true);
-    script.onerror = () => setErrorInfo('Provedor do Open Finance bloqueado no seu navegador. Verifique AdBlockers.');
-    document.body.appendChild(script);
-
-    return () => {
-      // Cleanup happens only on unmount
-    };
+    return new Promise((resolve) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.pluggy.ai/pluggy-connect/v2/pluggy-connect.js';
+      script.async = true;
+      script.onload = () => { setScriptLoaded(true); resolve(); };
+      script.onerror = () => { setErrorInfo('Open Finance temporariamente indisponível. Tente mais tarde ou use importação manual.'); resolve(); };
+      document.body.appendChild(script);
+    });
   }, []);
 
   const startConnectFlow = useCallback(async () => {
+    await loadScript();
     if (!window.PluggyConnect) {
-      setErrorInfo('Widget Open Finance ainda não está pronto para uso inicial.');
+      setErrorInfo('Open Finance indisponível. Use a importação manual de extratos.');
       return;
     }
 
@@ -91,7 +90,7 @@ export default function PluggyWidget({ onConnectSuccess }) {
         <button 
            className="btn btn-primary" 
            onClick={startConnectFlow} 
-           disabled={loadingToken || !scriptLoaded}
+           disabled={loadingToken}
            style={{ width: '100%', display: 'flex', justifyContent: 'center' }}
         >
             {loadingToken ? <RefreshCw size={16} className="animate-pulse" /> : <Building2 size={16} />}

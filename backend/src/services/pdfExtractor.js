@@ -82,10 +82,6 @@ function preprocessBankText(text) {
 
   cleaned = cleaned.split('\n').map(line => line.trim()).filter(line => line.length > 0).join('\n');
 
-  if (cleaned.length > 18000) {
-    cleaned = cleaned.substring(0, 18000) + '\n[... texto truncado ...]';
-  }
-
   return cleaned;
 }
 

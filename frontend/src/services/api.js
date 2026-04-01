@@ -137,7 +137,11 @@ class ApiService {
   deleteAIRule(id) { return this.request(`/ai/rules/${id}`, { method: 'DELETE' }); }
 
 
+  // Import
   getImportHistory() { return this.request('/import/history'); }
+
+  // Audit
+  getAuditLog() { return this.request('/audit'); }
 
   async uploadFile(file, accountId, memberId) {
     const formData = new FormData();

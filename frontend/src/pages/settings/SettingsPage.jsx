@@ -27,6 +27,7 @@ export default function SettingsPage() {
   const [familyForm, setFamilyForm] = useState({ name: '', email: '', password: '', role: 'member', entity_id: '' });
   const [showEntityModal, setShowEntityModal] = useState(false);
   const [entityForm, setEntityForm] = useState({ name: '', members: [] });
+  const [auditLogs, setAuditLogs] = useState([]);
 
   const isGrantedMember = profile?.plan_status === 'granted';
 
@@ -44,7 +45,15 @@ export default function SettingsPage() {
     if (activeTab === 'ai') loadAIRules();
     if (activeTab === 'preferences') { loadCategories(); loadAccounts(); }
     if (activeTab === 'family') loadFamily();
+    if (activeTab === 'audit') loadAudit();
   }, [activeTab]);
+
+  const loadAudit = async () => {
+    try {
+      const logs = await api.getAuditLog();
+      setAuditLogs(Array.isArray(logs) ? logs : []);
+    } catch (err) { console.error('Audit load error', err); }
+  };
 
   const loadAIRules = async () => {
     try { const result = await api.getAIRules(); setAiRules(result.rules || []); setAiStats(result.stats || aiStats); } catch {
@@ -642,28 +651,27 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* AUDIT TAB */}
       {activeTab === 'audit' && (
         <div className="card">
           <div className="card-header"><h3 className="card-title">📋 Registro de Atividade</h3></div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {[
-              { date: '28/03/2026 00:45', action: 'Login via Google OAuth', icon: '🔐' },
-              { date: '27/03/2026 22:30', action: 'Importação de extrato: extrato_nubank.ofx (45 transações)', icon: '📤' },
-              { date: '27/03/2026 20:15', action: 'Perfil atualizado: telefone e endereço', icon: '👤' },
-              { date: '26/03/2026 14:00', action: 'Score de Saúde Financeira recalculado: 36 (D)', icon: '❤️' },
-              { date: '25/03/2026 10:30', action: 'Meta criada: Viagem Europa (R$ 25.000)', icon: '🎯' },
-              { date: '24/03/2026 09:00', action: 'Nova conta cadastrada: Nubank Cartão', icon: '💳' },
-            ].map((log, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', borderBottom: '1px solid var(--border-color)' }}>
-                <span style={{ fontSize: '1.25rem' }}>{log.icon}</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '0.85rem' }}>{log.action}</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{log.date}</div>
+          {auditLogs.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📋</div>
+              Nenhuma atividade registrada ainda. Ações como importações, edições e atualizações de perfil aparecerão aqui automaticamente.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {auditLogs.map((log, i) => (
+                <div key={log.id || i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', borderBottom: '1px solid var(--border-color)' }}>
+                  <span style={{ fontSize: '1.25rem' }}>{log.icon || '📋'}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: '0.85rem' }}>{log.details || log.action}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{new Date(log.created_at).toLocaleString('pt-BR')}</div>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
