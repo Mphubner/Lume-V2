@@ -329,9 +329,24 @@ ${catRule}
     return { titular: null, transactions: [] };
   }
 
-  // ─── Parse the JSON response (same for both providers) ─────────────────────
+  // ─── Parse the JSON response ─────────────────────
+  
+  function extractJSON(str) {
+    if (!str) return null;
+    try { return JSON.parse(str); } catch(e) {}
+    
+    // Extract everything between `{` and `}` or ````json` ... ````
+    const match = str.match(/(?:```(?:json)?\s*)({[\s\S]*})(?:\s*```)/i) || str.match(/({[\s\S]*})/);
+    let cleaned = match && match[1] ? match[1] : str;
+    
+    // Fix trailing commas
+    cleaned = cleaned.replace(/,\s*([\]}])/g, '$1');
+    try { return JSON.parse(cleaned); } catch(e) {}
+    throw new Error('Raw response not parsable');
+  }
+
   try {
-    const parsed = JSON.parse(result.content);
+    const parsed = extractJSON(result.content);
     const titular = parsed.titular || null;
     
     const rawTuples = parsed.t || [];
@@ -340,6 +355,7 @@ ${catRule}
       descricao: item[1] || '',
       valor: item[2] || 0,
       categoria: item[3] || 'Outros',
+      subcategory: item[4] || null,
     }));
 
     console.log(`🤖 AI extracted ${transacoes.length} transactions (tokens: ${result.tokens}) via ${result.provider}`);
@@ -379,6 +395,7 @@ ${catRule}
         description: descriptionStr,
         amount: isNaN(finalAmount) ? 0 : finalAmount,
         category: t.categoria || t.category || null,
+        subcategory: t.subcategory || null,
       };
     });
 
