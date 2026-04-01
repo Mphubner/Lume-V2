@@ -26,11 +26,13 @@ export async function extractTransactionsFromPDF(buffer, categories = []) {
   }
 
   // Step 2: Clean and normalize the text
-  const cleanedText = preprocessBankText(rawText);
+  // Regex de limpeza geral (Bancos digitais e tradicionais variam a grafia '-' x '−')
+  const rawNormalized = rawText.replace(/[\u2212\u2013\u2014]/g, '-'); 
+  const cleanedText = preprocessBankText(rawNormalized);
 
   // Step 3: Split into chunks safely with overlap
-  // 8b-instant has 500k TPD and 131k TPM — we can safely use bigger chunks
-  const chunks = splitIntoChunksSafely(cleanedText, 5000);
+  // 8b-instant has 500k TPD, 3000 chars limit (prevents output token exhaustion entirely)
+  const chunks = splitIntoChunksSafely(cleanedText, 3000);
 
   // Step 4: Send each chunk to AI for structured extraction sequentially with a delay
   let allTransactions = [];
@@ -111,16 +113,18 @@ function preprocessBankText(text) {
   // O que queremos manter: 'Pix enviado: "Cp :60746948-ZAMP SA" -R$ 87,70'
   // Regra: após o PRIMEIRO valor R$ (que é a transação), remover tudo que sobra.
   const decontaminatedLines = cleaned.split('\n').map(line => {
-    const trimmed = line.trim();
+    // Normaliza sinais matemáticos comuns de PDFs (En-dash, Minus sign unicode)
+    // Isso é crítico em arquivos do PicPay e Nubank
+    let trimmed = line.trim();
     if (trimmed.length === 0) return '';
 
-    // Detect transaction lines (start with Pix, Compra, Pagamento, Credito, Aplicacao, etc)
-    const isTxLine = /^(Pix|Compra|Pagamento|Credito|Crédito|Transfer|Aplicacao|Aplicação|Resgate|Saque|Tarifa|IOF|Rendimento|Boleto|Ted |Doc )/i.test(trimmed);
+    // Detect transaction lines (allows optional time prefix like '21:43Pix' or '21:43 Pix')
+    const isTxLine = /^(\d{2}:\d{2}\s*)?(Pix|Compra|Pagamento|Credito|Crédito|Transfer|Aplicacao|Aplicação|Resgate|Saque|Tarifa|IOF|Rendimento|Boleto|Ted |Doc |Dinheiro resgatado|Estorno)/i.test(trimmed);
     if (!isTxLine) return trimmed;
 
     // Find the FIRST R$ value (the transaction amount)
-    // Pattern: -R$ 87,70 or R$ 2.800,00 or -R$ 1.234,56
-    const firstValueMatch = trimmed.match(/-?R\$\s*[\d.,]+/);
+    // Pattern: +R$ 87,70 or -R$ 2.800,00 or R$ 1.234,56
+    const firstValueMatch = trimmed.match(/[+-]?\s*R\$\s*[\d.,]+/i);
     if (!firstValueMatch) return trimmed;
 
     // Keep everything up to and including the first R$ value
@@ -181,31 +185,29 @@ async function extractWithAI(textChunk, categories = []) {
     : `6. Estime uma "categoria" financeira básica.`;
 
   const systemPrompt = `Você é um extrator financeiro rigoroso de extratos bancários brasileiros.
-Seu objetivo é extrair TODAS as transações e montar um JSON perfeito. NÃO PULE nenhuma transação.
+Seu objetivo é extrair TODAS as transações sem omitir NENHUMA.
 
 ### Regras:
-1. Normalize datas para DD/MM/AAAA.
-2. NEGATIVO para saídas/débitos/pagamentos (-R$), POSITIVO para entradas/créditos/recebimentos (+R$ ou R$).
-3. Ignore linhas de "Saldo total", "Saldo disponivel" ou "Saldo por transação". Extraia APENAS lançamentos individuais.
-4. Identifique o TITULAR do extrato no cabeçalho.
-5. CONTEXTO DE DATA: A data aparece como título (ex: "13 de Janeiro de 2026 Saldo do dia: R$ 2.724,90"). Aplique essa data a todas as transações abaixo dela até a próxima data.
+1. Normalize datas para DD/MM/AAAA. Se o ano não constar, use o ano subentendido.
+2. SINAL MATEMÁTICO NO VALOR: 
+  - Saídas/Débitos/Pagamentos = SINAL NEGATIVO (ex: -50.25).
+  - Entradas/Créditos = SINAL POSITIVO (ex: 50.25).
+3. Ignore linhas de saldos.
+4. Identifique o NOME do Titular se houver (senão, deixe vazio).
+5. CONTEXTO DE DATA ESPALHADA: Se a data aparecer como um cabeçalho subentendido acima de várias transações, aplique-a a em todas elas.
 ${catRule}
-7. IMPORTANTE: Cada linha começando com "Pix", "Compra", "Pagamento", "Credito", "Aplicacao", "Resgate", "Transferência", "Tarifa", "IOF" ou "Saque" é UMA transação. O valor vem após o último R$ da linha. Extraia TODAS sem pular nenhuma.
-8. Se houver transações idênticas (mesma data, descrição e valor), inclua TODAS elas. Não deduplicar.
+7. IMPORTANTE: Extraia de forma ultra-comprimida. Responda em JSON usando UMA matriz de tuplas sob a chave "t". Leia todas as linhas de transação e NÃO PULE NENHUMA. Não deduplique linhas idênticas!
 
-### Formato de Saída (JSON estrito):
+### Formato de Saída OBRIGATÓRIO (Minitupla):
 {
-  "titular": "NOME DO TITULAR OU EMPRESA AQUI",
-  "transacoes": [
-    {"data": "DD/MM/AAAA", "descricao": "string", "valor": -50.00, "categoria": "Alimentação"}
+  "titular": "Nome",
+  "t": [
+    ["13/01/2026", "Pix enviado Maria", -150.00, "Alimentação"],
+    ["13/01/2026", "Recebido João", 200.00, "Outros"]
   ]
 }`;
 
-  const userMessage = `Extraia TODAS as transações do texto de extrato bancário abaixo. Responda SOMENTE com o JSON, sem explicações.
-
---- TEXTO DO EXTRATO ---
-${textChunk}
---- FIM DO EXTRATO ---`;
+  const userMessage = `Extraia TODAS as transações e as formate na chave "t" como um array de listas (Data, Descrição, Valor Float e Categoria).\n\n--- EXTRATO ---\n${textChunk}\n--- FIM ---`;
 
   const makeRequest = async (retries = 5, delay = 5000) => {
     try {
@@ -260,21 +262,24 @@ ${textChunk}
       }
 
       const parsed = JSON.parse(content);
-      const transacoes = parsed.transacoes || parsed.transactions || [];
       const titular = parsed.titular || null;
+      
+      // Decodificando o JSON minitupla de volta para objetos formatados
+      const rawTuples = parsed.t || [];
+      const transacoes = rawTuples.map(item => {
+        return {
+          data: item[0] || '',
+          descricao: item[1] || '',
+          valor: item[2] || 0,
+          categoria: item[3] || 'Outros'
+        };
+      });
 
-      console.log(`🤖 AI extracted ${transacoes.length} transactions (tokens: ${data.usage?.total_tokens || '?'})`);
+      console.log(`🤖 AI extracted ${transacoes.length} transactions (tokens: ${data.usage?.total_tokens || '?'}) via Tuple Compression`);
 
       const formattedTransacoes = transacoes.map(t => {
-        let amountParsed = 0;
-        const val = t.valor !== undefined ? t.valor : t.amount;
-
-        if (typeof val === 'number') {
-          amountParsed = val;
-        } else if (typeof val === 'string') {
-          const cleanStr = val.replace(/\./g, '').replace(',', '.').replace(/[^\d.-]/g, '');
-          amountParsed = parseFloat(cleanStr);
-        }
+        let amountParsed = typeof t.valor === 'number' ? t.valor : parseFloat(String(t.valor).replace(',', '.'));
+        if (isNaN(amountParsed)) amountParsed = 0;
 
         const descriptionStr = t.descricao || t.description || '';
         const descLower = descriptionStr.toLowerCase();
