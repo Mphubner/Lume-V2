@@ -211,9 +211,25 @@ ${textChunk}
         if (typeof val === 'number') {
           amountParsed = val;
         } else if (typeof val === 'string') {
-          // Trata formatos "80.000,00" removendo pontos e trocando virgula por ponto -> "80000.00"
           const cleanStr = val.replace(/\./g, '').replace(',', '.');
           amountParsed = parseFloat(cleanStr);
+        }
+
+        const descLower = (t.descricao || t.description || '').toLowerCase();
+        
+        // Safety net: Some banks output 'Pix recebido' but AI might put it as negative randomly.
+        if (amountParsed < 0 && (
+          descLower.includes('recebido') || 
+          descLower.includes('crédito') || 
+          descLower.includes('credito') || 
+          descLower.includes('resgate') || 
+          descLower.includes('restituição') || 
+          descLower.includes('restituicao') ||
+          descLower.includes('remuneração') ||
+          descLower.includes('salário') ||
+          descLower.includes('salario')
+        )) {
+          amountParsed = Math.abs(amountParsed);
         }
 
         return {

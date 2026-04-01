@@ -99,25 +99,29 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
       // Regra Lógica: Identificar transferências para não impactar Receita/Despesa (exceto salários)
       const isTransfer = (descLower.includes('transferencia') || descLower.includes('ted ') || descLower.includes('pix env') || descLower.includes('pix rec')) && !descLower.includes('salario');
 
-      await supabase.from('transactions').insert({
-        user_id: user.id,
-        account_id: accountId,
-        member_id: memberId,
-        category_id: categoryId,
-        description: raw.description,
-        raw_description: raw.description,
-        amount: raw.amount,
-        type: isTransfer ? 'transfer' : (raw.amount >= 0 ? 'income' : 'expense'),
-        is_internal_transfer: isTransfer,
-        date: normalizedDate,
-        origin: 'import',
-        import_hash: hash,
-        is_confirmed: true,
-        is_reconciled: false,           // Awaits user review
-        ai_confidence: aiConfidence,    // Used to highlight low-confidence items
-        import_id: importRecordId
-      });
-      imported++;
+      try {
+        await supabase.from('transactions').insert({
+          user_id: user.id,
+          account_id: accountId,
+          member_id: memberId,
+          category_id: categoryId,
+          description: raw.description,
+          raw_description: raw.description,
+          amount: raw.amount,
+          type: isTransfer ? 'transfer' : (raw.amount >= 0 ? 'income' : 'expense'),
+          is_internal_transfer: isTransfer,
+          date: normalizedDate,
+          origin: 'import',
+          import_hash: hash,
+          is_confirmed: true,
+          is_reconciled: false,
+          ai_confidence: aiConfidence,
+          import_id: importRecordId
+        });
+        imported++;
+      } catch (insertErr) {
+        console.warn('Failed to insert single transaction:', raw.description, insertErr.message);
+      }
     }
 
     await supabase.from('imports').update({

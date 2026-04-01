@@ -15,7 +15,7 @@ export default function ImportAuditModal({ importId, onClose }) {
   const fetchTransactions = async () => {
     try {
       setLoading(true);
-      const res = await api.get(`/transactions?import_id=${importId}`);
+      const res = await api.getTransactions({ import_id: importId });
       if (res.data) setTransactions(res.data);
       else setTransactions(res);
     } catch (e) {
@@ -29,7 +29,7 @@ export default function ImportAuditModal({ importId, onClose }) {
   const handleDelete = async (id) => {
     if (!window.confirm('Excluir este lançamento?')) return;
     try {
-      await api.delete(`/transactions/${id}`);
+      await api.deleteTransaction(id);
       setTransactions(transactions.filter(t => t.id !== id));
     } catch (e) { alert('Erro ao excluir'); }
   };
@@ -41,7 +41,7 @@ export default function ImportAuditModal({ importId, onClose }) {
 
   const handleSaveEdit = async (id) => {
     try {
-      await api.put(`/transactions/${id}`, editForm);
+      await api.updateTransaction(id, editForm);
       setTransactions(transactions.map(t => t.id === id ? { ...t, ...editForm } : t));
       setEditingId(null);
     } catch (e) { alert('Erro ao salvar'); }

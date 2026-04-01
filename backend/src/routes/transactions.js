@@ -23,8 +23,16 @@ router.get('/', async (req, res) => {
       .from('transactions')
       .select('*, categories(name, icon, color), accounts(name, institution)', { count: 'exact' })
       .eq('user_id', req.user.id)
-      .neq('is_reconciled', false)  // Only show approved transactions by default
       .order(sort, { ascending: order === 'asc' });
+
+    // Se estivermos buscando uma importação específica, mostramos ambas (aprovadas e não aprovadas).
+    // Caso contrário, ocultamos as não reconciliadas por padrão, a não ser que pedido explícito.
+    if (!import_id && req.query.status !== 'all' && req.query.status !== 'pending') {
+      query = query.neq('is_reconciled', false);
+    }
+    if (req.query.status === 'pending') {
+      query = query.eq('is_reconciled', false);
+    }
 
     if (month && year) {
       const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
