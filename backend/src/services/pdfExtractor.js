@@ -28,20 +28,35 @@ export async function extractTransactionsFromPDF(buffer, categories = []) {
   // Step 2: Clean and normalize the text
   const cleanedText = preprocessBankText(rawText);
 
-  // Step 3: Split into chunks if too large (Groq has token limits)
-  // 5000 chars is roughly 1500-2000 tokens.
-  const chunks = splitIntoChunks(cleanedText, 5000);
+  // Step 3: Split into chunks safely with overlap
+  const chunks = splitIntoChunksSafely(cleanedText, 3500);
 
-  // Step 4: Send each chunk to AI for structured extraction
+  // Step 4: Send each chunk to AI for structured extraction sequentially with a delay
   let allTransactions = [];
   let titularDetectado = null;
 
-  for (const chunk of chunks) {
-    const aiData = await extractWithAI(chunk, categories);
+  console.log(`📦 PDF dividido em ${chunks.length} partes. Iniciando extração sequencial...`);
+
+  for (let i = 0; i < chunks.length; i++) {
+    console.log(`Processando parte ${i + 1}/${chunks.length}...`);
+    const aiData = await extractWithAI(chunks[i], categories);
+    
     if (aiData.titular && !titularDetectado) {
       titularDetectado = aiData.titular;
     }
-    allTransactions.push(...aiData.transactions);
+    
+    if (aiData.transactions && aiData.transactions.length > 0) {
+      allTransactions.push(...aiData.transactions);
+    } else {
+      console.warn(`⚠️ Parte ${i + 1} não retornou transações válidas.`);
+    }
+
+    // Delay obrigatório para não estourar o TPM (se não for o último chunk)
+    if (i < chunks.length - 1) {
+      const waitSeconds = 12;
+      console.log(`⏳ Aguardando ${waitSeconds}s antes do próximo chunk para evitar Rate Limit...`);
+      await new Promise(r => setTimeout(r, waitSeconds * 1000));
+    }
   }
 
   // Step 5: Post-process and validate
@@ -55,59 +70,58 @@ export async function extractTransactionsFromPDF(buffer, categories = []) {
  * Pre-process bank statement text to reduce noise and token usage
  */
 function preprocessBankText(text) {
-  let cleaned = text;
-
-  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
-  cleaned = cleaned.replace(/[ \t]{2,}/g, ' ');
+  let cleaned = text.replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ');
 
   const noisePatterns = [
-    /SAC\s*\d{3,}/gi,
-    /ouvidoria[^\n]*/gi,
-    /central\s+de\s+atendimento[^\n]*/gi,
-    /www\.\w+\.com\.br/gi,
-    /pág(ina)?\s*\d+\s*(de\s*\d+)?/gi,
-    /página\s*\d+/gi,
-    /^\s*\d+\s*\/\s*\d+\s*$/gm,
-    /atendimento\s*24\s*horas?/gi,
-    /este\s+documento\s+[^\n]*/gi,
-    /informações\s+sobre\s+[^\n]*/gi,
-    /cpf[:/\s]+\d{3}\.\d{3}\.\d{3}-\d{2}/gi,
-    /cnpj[:/\s]+\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/gi,
-    /agência[:/\s]+\d+/gi,
-    /conta[:/\s]+[\d.-]+/gi,
+    /SAC\s*\d{3,}/gi, /ouvidoria[^\n]*/gi, /central\s+de\s+atendimento[^\n]*/gi,
+    /www\.\w+\.com\.br/gi, /pág(ina)?\s*\d+\s*(de\s*\d+)?/gi, /página\s*\d+/gi,
+    /^\s*\d+\s*\/\s*\d+\s*$/gm, /atendimento\s*24\s*horas?/gi,
+    /este\s+documento\s+[^\n]*/gi, /informações\s+sobre\s+[^\n]*/gi,
+    /cpf[:/\s]+\d{3}\.\d{3}\.\d{3}-\d{2}/gi, /cnpj[:/\s]+\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/gi,
+    /agência[:/\s]+\d+/gi, /conta[:/\s]+[\d.-]+/gi,
+    /Documento\s+emitido\s+em[:\s]+[^\n]+/gi,
+    /PicPay\s+Serviços\s+S\/A/gi,
+    /Dias\s+úteis\s+das\s+\d{2}h\s+às\s+\d{2}h/gi,
+    /^\s*\d+\s+de\s+\d+\s*$/gm,
+    /Saldo\s+ao\s+final\s+do\s+dia[:\s]+[^\n]+/gi,
+    // Específico do Inter
+    /Fale\s+com\s+a\s+gente/gi,
+    /Deficiência\s+de\s+fala\s+e\s+audição[^\n]*/gi,
+    /Solicitado\s+em[:\s]+[^\n]+/gi
   ];
 
   for (const pattern of noisePatterns) {
     cleaned = cleaned.replace(pattern, '');
   }
-
-  return cleaned;
+  return cleaned.split('\n').map(line => line.trim()).filter(line => line.length > 0).join('\n');
 }
 
 /**
- * Split text into manageable chunks for the AI
+ * Splitting text securely using line detection and overlap window
  */
-function splitIntoChunks(text, maxChars) {
-  if (text.length <= maxChars) return [text];
-
+function splitIntoChunksSafely(text, maxChars) {
+  const lines = text.split('\n');
   const chunks = [];
-  let remaining = text;
+  let currentChunkLines = [];
+  let currentLength = 0;
+  const overlapSize = 10; // Maintains context across chunks
 
-  while (remaining.length > 0) {
-    if (remaining.length <= maxChars) {
-      chunks.push(remaining);
-      break;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (currentLength + line.length > maxChars && currentChunkLines.length > 0) {
+      chunks.push(currentChunkLines.join('\n'));
+      currentChunkLines = currentChunkLines.slice(-overlapSize);
+      currentLength = currentChunkLines.join('\n').length;
     }
-
-    let splitAt = remaining.lastIndexOf('\n', maxChars);
-    if (splitAt === -1 || splitAt === 0) {
-      splitAt = maxChars; // Fallback only if absolutely no newline exists
-    }
-
-    chunks.push(remaining.substring(0, splitAt));
-    remaining = remaining.substring(splitAt).trim();
+    
+    currentChunkLines.push(line);
+    currentLength += line.length + 1;
   }
 
+  if (currentChunkLines.length > 0) {
+    chunks.push(currentChunkLines.join('\n'));
+  }
+  
   return chunks;
 }
 
@@ -124,22 +138,21 @@ async function extractWithAI(textChunk, categories = []) {
     together: 'https://api.together.xyz/v1',
   };
   const baseUrl = baseUrls[provider] || baseUrls.groq;
-  const model = process.env.AI_MODEL_EXTRACTION || 'llama-3.1-8b-instant';
+  const model = process.env.AI_MODEL_EXTRACTION || 'llama-3.3-70b-versatile';
 
   const catRule = categories && categories.length > 0
     ? `6. A "categoria" da transação DEVE ser EXATAMENTE uma da lista abaixo, a que mais fizer sentido. Se nenhuma se encaixar, coloque "Outros".\nLISTA DE CATEGORIAS:\n[${categories.join(', ')}]`
-    : `6. Estime uma "categoria" financeira básica (ex: Alimentação, Transporte, Moradia, Outros).`;
+    : `6. Estime uma "categoria" financeira básica.`;
 
-  const systemPrompt = `Você é um extrator de dados financeiros especializado em extratos bancários brasileiros.
+  const systemPrompt = `Você é um extrator financeiro rigoroso de extratos brasileiros.
+Seu objetivo é extrair transações e montar um JSON perfeito.
 
-Sua tarefa é extrair os dados básicos do Titular e converter o texto bruto de um extrato bancário em um array JSON.
-
-### Regras Estritas:
-1. Normalize TODAS as datas para o formato DD/MM/AAAA. Se o ano não aparecer, use o ano mencionado no cabeçalho ou o atual.
-2. Converta valores para float: NEGATIVO para saídas/débitos/pagamentos, POSITIVO para entradas/créditos/recebimentos.
-3. Trate "D" ou "(-)" como débito (negativo). Trate "C" ou "(+)" como crédito (positivo).
-4. Ignore linhas de saldo final e inicial. Extraia APENAS lançamentos de conta individuais.
-5. Identifique o TITULAR do extrato (Nome da Empresa, Razão Social, ou Nome do Titular Pessoal). Se não achar, envie null.
+### Regras:
+1. Normalize datas para DD/MM/AAAA.
+2. NEGATIVO para saídas/débitos/pagamentos (-R$), POSITIVO para entradas/créditos/recebimentos (+R$ ou R$).
+3. Ignore linhas de "Saldo total", "Saldo disponivel" ou "Saldo por transação". Extraia APENAS lançamentos de conta.
+4. Identifique o TITULAR do extrato no cabeçalho.
+5. CONTEXTO DE DATA: Em alguns bancos (ex: Inter, PicPay), a data aparece como um título ANTES das transações (ex: "13 de Janeiro de 2026 Saldo do dia: R$ 2.724,90"). Aplique essa data a todas as transações abaixo dela até encontrar a próxima data.
 ${catRule}
 
 ### Formato de Saída (JSON estrito):
