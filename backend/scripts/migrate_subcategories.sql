@@ -1,34 +1,26 @@
--- ATENÇÃO: Essa query irá REINICIAR suas categorias para o modelo MÃE -> SUBCATEGORIAS ARRAY.
--- Ela irá APAGAR todas as categorias atuais e criar a nova estrutura oficial e limpa.
--- Como você irá apagar e reimportar as transações, isso é 100% seguro.
--- Cole tudo isso no SQL Editor do Supabase e clique em RUN.
+-- ATENÇÃO: Essa query irá REINICIAR suas categorias para o modelo MÃE -> SUBCATEGORIAS ARRAY,
+-- respeitando a fundo a sua nova árvore estrutural detalhada (16 categorias principais).
+-- Cole no SQL Editor do Supabase e clique em RUN.
 
 DELETE FROM "public"."categories";
 
-INSERT INTO "public"."categories" ("name", "type", "is_system", "nature", "color", "icon", "subcategories") VALUES
--- 1. SAÚDE & BEM-ESTAR
-('Saúde & Bem-Estar', 'expense', true, 'fixed', '#ec4899', '🏥', ARRAY['Academia', 'Consultas/Exames', 'Cosméticos/Perfumaria', 'Cuidados Pessoais', 'Farmácia', 'Plano de Saúde', 'Salão/Barbearia', 'Saúde', 'Terapia']),
+INSERT INTO "public"."categories" ("user_id", "name", "type", "is_system", "nature", "color", "icon", "subcategories") VALUES
+-- GASTOS
+('Alimentação', 'expense', true, 'variable', '#eab308', '🍕', ARRAY['Delivery e Lanches', 'Mercado (Despensa)', 'Padaria/Café', 'Restaurantes e Bares']),
+('Assinaturas', 'expense', true, 'fixed', '#22c55e', '💻', ARRAY['Clubes de Assinatura', 'Softwares', 'Streaming (Netflix/Spotify)']),
+('Contas Residenciais', 'expense', true, 'fixed', '#f97316', '⚡', ARRAY['Água', 'Energia', 'Gás', 'Internet/TV']),
+('Cuidados Pessoais', 'expense', true, 'variable', '#d946ef', '🧴', ARRAY['Academia', 'Cosméticos/Perfumaria', 'Salão/Barbearia']),
+('Educação', 'expense', true, 'variable', '#6366f1', '📚', ARRAY['Cursos Extras', 'Livros/Material', 'Mensalidades']),
+('Financeiro', 'expense', true, 'fixed', '#64748b', '💰', ARRAY['Gastos Não identificados', 'Juros/Empréstimos', 'Seguros de Vida', 'Tarifas Bancárias']),
+('Investimentos', 'expense', true, 'future', '#0ea5e9', '📈', ARRAY['Ações/FIIs', 'Previdência', 'Renda Fixa', 'Reserva de Emergência']),
+('Lazer', 'expense', true, 'variable', '#8b5cf6', '🎭', ARRAY['Cinema/Shows', 'Eventos Sociais', 'Hobbies', 'Viagens']),
+('Moradia', 'expense', true, 'fixed', '#f43f5e', '🏠', ARRAY['Aluguel/Prestação', 'Condomínio', 'Decoração', 'IPTU', 'Manutenção/Reparos']),
+('Pets', 'expense', true, 'variable', '#f59e0b', '🐾', ARRAY['Banho e Tosa', 'Ração', 'Veterinário']),
+('Presentes', 'expense', true, 'variable', '#ef4444', '🎁', ARRAY['Datas Comemorativas', 'Doações', 'Mimos']),
+('Saúde', 'expense', true, 'fixed', '#ec4899', '🏥', ARRAY['Consultas/Exames', 'Farmácia', 'Plano de Saúde', 'Terapia']),
+('Transporte', 'expense', true, 'variable', '#3b82f6', '🚗', ARRAY['App (Uber/99)', 'Combustível', 'Manutenção', 'Ônibus/Metrô', 'Seguro e IPVA']),
+('Vestuário', 'expense', true, 'variable', '#10b981', '👕', ARRAY['Acessórios', 'Calçados', 'Roupas']),
 
--- 2. ESTILO DE VIDA
-('Estilo de Vida', 'expense', true, 'variable', '#8b5cf6', '🎭', ARRAY['Acessórios', 'Assinaturas', 'Calçados', 'Cinema/Shows', 'Clubes de Assinatura', 'Cursos Extras', 'Educação', 'Eventos Sociais', 'Hobbies', 'Lazer', 'Livros/Material', 'Mensalidades', 'Roupas', 'Softwares', 'Streaming', 'Vestuário', 'Viagens']),
-
--- 3. FINANÇAS
-('Finanças', 'both', true, 'fixed', '#64748b', '💰', ARRAY['Ações/FIIs', 'Entrada não Identificada', 'Financeiro', 'Gastos Não identificados', 'Investimentos', 'Juros/Empréstimos', 'Previdência', 'Renda Fixa', 'Reserva de Emergência', 'Seguros de Vida', 'Tarifas Bancárias']),
-
--- 4. HABITAÇÃO
-('Habitação', 'expense', true, 'fixed', '#f43f5e', '🏠', ARRAY['Água', 'Aluguel/Prestação', 'Condomínio', 'Contas Residenciais', 'Decoração', 'Energia', 'Gás', 'Internet/TV', 'IPTU', 'Manutenção/Reparos', 'Moradia']),
-
--- 5. ALIMENTAÇÃO
-('Alimentação', 'expense', true, 'variable', '#eab308', '🍕', ARRAY['Alimentação', 'Delivery e Lanches', 'Mercado', 'Padaria/Café', 'Restaurantes e Bares']),
-
--- 6. MOBILIDADE
-('Mobilidade', 'expense', true, 'variable', '#3b82f6', '🚗', ARRAY['App Uber/99', 'Combustível', 'Manutenção', 'Ônibus/Metrô', 'Seguro e IPVA', 'Transporte']),
-
--- 7. FAMÍLIA & PETS
-('Família & Pets', 'expense', true, 'variable', '#f59e0b', '🐾', ARRAY['Banho e Tosa', 'Datas Comemorativas', 'Doações', 'Mimos', 'Pets', 'Presentes', 'Ração', 'Veterinário']),
-
--- 8. ENTRADAS
+-- ENTRADAS E OUTROS
 ('Entradas', 'income', true, 'income', '#22c55e', '📥', ARRAY['Dividendos', 'Freelance', 'Pró-labore', 'Rendas', 'Salário']),
-
--- 9. SISTEMA (Ajustes)
-('Sistema', 'both', true, 'adjustments', '#94a3b8', '🛠️', ARRAY['Ajuste de Saldo', 'Ajustes', 'Estorno', 'Imprevistos', 'Reembolso']);
+('Ajustes', 'both', true, 'adjustments', '#94a3b8', '🛠️', ARRAY['Ajuste de Saldo', 'Estorno', 'Imprevistos', 'Reembolso']);

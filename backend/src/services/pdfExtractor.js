@@ -152,8 +152,8 @@ function splitIntoChunksSafely(text, maxChars) {
     const line = lines[i];
     if (currentLength + line.length > maxChars && currentChunkLines.length > 0) {
       chunks.push(currentChunkLines.join('\n'));
-      currentChunkLines = currentChunkLines.slice(-overlapSize);
-      currentLength = currentChunkLines.join('\n').length;
+      currentChunkLines = overlapSize > 0 ? currentChunkLines.slice(-overlapSize) : [];
+      currentLength = currentChunkLines.length > 0 ? currentChunkLines.join('\n').length : 0;
     }
     
     currentChunkLines.push(line);
