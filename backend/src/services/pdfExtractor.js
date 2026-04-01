@@ -15,7 +15,7 @@ const pdfParse = require('pdf-parse');
 /**
  * Main entry point: receives a PDF buffer, returns an array of transaction objects
  */
-export async function extractTransactionsFromPDF(buffer) {
+export async function extractTransactionsFromPDF(buffer, categories = []) {
   // Step 1: Extract raw text from PDF
   const pdfData = await pdfParse(buffer);
   const rawText = pdfData.text;
@@ -36,7 +36,7 @@ export async function extractTransactionsFromPDF(buffer) {
   let titularDetectado = null;
 
   for (const chunk of chunks) {
-    const aiData = await extractWithAI(chunk);
+    const aiData = await extractWithAI(chunk, categories);
     if (aiData.titular && !titularDetectado) {
       titularDetectado = aiData.titular;
     }
@@ -80,8 +80,6 @@ function preprocessBankText(text) {
     cleaned = cleaned.replace(pattern, '');
   }
 
-  cleaned = cleaned.split('\n').map(line => line.trim()).filter(line => line.length > 0).join('\n');
-
   return cleaned;
 }
 
@@ -100,12 +98,9 @@ function splitIntoChunks(text, maxChars) {
       break;
     }
 
-    let splitAt = remaining.lastIndexOf('\n\n', maxChars);
-    if (splitAt < maxChars * 0.5) {
-      splitAt = remaining.lastIndexOf('\n', maxChars);
-    }
-    if (splitAt < maxChars * 0.3) {
-      splitAt = maxChars;
+    let splitAt = remaining.lastIndexOf('\n', maxChars);
+    if (splitAt === -1 || splitAt === 0) {
+      splitAt = maxChars; // Fallback only if absolutely no newline exists
     }
 
     chunks.push(remaining.substring(0, splitAt));
@@ -131,18 +126,23 @@ async function extractWithAI(textChunk) {
     together: 'https://api.together.xyz/v1',
   };
   const baseUrl = baseUrls[provider] || baseUrls.groq;
-  const model = process.env.AI_MODEL || 'llama-3.3-70b-versatile';
+  const model = process.env.AI_MODEL_EXTRACTION || 'llama-3.1-8b-instant';
 
-  const systemPrompt = `Você é um extrator de dados financeiros especializado em extratos bancários brasileiros (Bradesco, Itaú, Nubank, Inter, PagBank, PicPay, C6, Sicredi, Caixa, Banco do Brasil, BTG, Safra, etc.).
+  const catRule = categories && categories.length > 0 
+    ? `6. A "categoria" da transação DEVE ser EXATAMENTE uma da lista abaixo, a que mais fizer sentido. Se nenhuma se encaixar, coloque "Outros".\nLISTA DE CATEGORIAS:\n[${categories.join(', ')}]`
+    : `6. Estime uma "categoria" financeira básica (ex: Alimentação, Transporte, Moradia, Outros).`;
 
-Sua tarefa é extrair os dados básicos do Titular e converter o texto bruto de um extrato bancário em um array JSON de transações.
+  const systemPrompt = `Você é um extrator de dados financeiros especializado em extratos bancários brasileiros.
+
+Sua tarefa é extrair os dados básicos do Titular e converter o texto bruto de um extrato bancário em um array JSON.
 
 ### Regras Estritas:
-1. Normalize TODAS as datas para o formato DD/MM/AAAA. Se o ano não aparecer, use o ano mencionado no cabeçalho do extrato ou 2025.
+1. Normalize TODAS as datas para o formato DD/MM/AAAA. Se o ano não aparecer, use o ano mencionado no cabeçalho ou o atual.
 2. Converta valores para float: NEGATIVO para saídas/débitos/pagamentos, POSITIVO para entradas/créditos/recebimentos.
 3. Trate "D" ou "(-)" como débito (negativo). Trate "C" ou "(+)" como crédito (positivo).
-4. Ignore linhas de saldo final e inicial. Extraia APENAS lançamentos móveis individuais.
-5. Identifique o TITULAR do extrato (Nome da Empresa, Razão Social, ou Nome do Titular Pessoal) baseando-se no cabeçalho inicial do PDF. Se não achar, envie null.
+4. Ignore linhas de saldo final e inicial. Extraia APENAS lançamentos de conta individuais.
+5. Identifique o TITULAR do extrato (Nome da Empresa, Razão Social, ou Nome do Titular Pessoal). Se não achar, envie null.
+${catRule}
 
 ### Formato de Saída (JSON estrito):
 {
@@ -172,22 +172,29 @@ ${textChunk}
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userMessage },
           ],
-          temperature: 0.05, // Muito baixo para garantir formatação estruturada
-          max_tokens: 4000, // Reduzido de 8192. O Groq cobra (max_tokens + prompt) do limite TPM por minuto.
+          temperature: 0.05, 
+          max_tokens: 1800, // Reduced token size for large files chunking
           response_format: { type: 'json_object' },
         }),
       });
 
-      if (response.status === 429 && retries > 0) {
-        console.warn(`⏳ AI Rate limite atingido (429). Aguardando ${delay/1000}s para tentar novamente...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return makeRequest(retries - 1, delay * 1.5);
-      }
-
       if (!response.ok) {
         const errText = await response.text();
+        
+        // Dynamic Rate Limit parsing
+        if (response.status === 429 && retries > 0) {
+          let dynamicDelay = delay;
+          const waitMatch = errText.match(/in ([\d.]+)s/);
+          if (waitMatch && waitMatch[1]) {
+            dynamicDelay = (parseFloat(waitMatch[1]) + 0.5) * 1000;
+          }
+          console.warn(`⏳ AI Rate limite atingido (429). Aguardando ${(dynamicDelay/1000).toFixed(1)}s para tentar novamente...`);
+          await new Promise(resolve => setTimeout(resolve, Math.max(dynamicDelay, 2000)));
+          return makeRequest(retries - 1, delay * 1.5);
+        }
+
         console.error(`AI extraction error (${response.status}):`, errText);
-        return [];
+        return { titular: null, transactions: [] };
       }
 
       const data = await response.json();
@@ -195,7 +202,7 @@ ${textChunk}
 
       if (!content) {
         console.warn('AI returned empty content for PDF extraction');
-        return [];
+        return { titular: null, transactions: [] };
       }
 
       const parsed = JSON.parse(content);
@@ -207,29 +214,13 @@ ${textChunk}
       const formattedTransacoes = transacoes.map(t => {
         let amountParsed = 0;
         const val = t.valor !== undefined ? t.valor : t.amount;
-        
+
         if (typeof val === 'number') {
           amountParsed = val;
         } else if (typeof val === 'string') {
+          // Trata formatos "80.000,00" removendo pontos e trocando virgula por ponto -> "80000.00"
           const cleanStr = val.replace(/\./g, '').replace(',', '.');
           amountParsed = parseFloat(cleanStr);
-        }
-
-        const descLower = (t.descricao || t.description || '').toLowerCase();
-        
-        // Safety net: Some banks output 'Pix recebido' but AI might put it as negative randomly.
-        if (amountParsed < 0 && (
-          descLower.includes('recebido') || 
-          descLower.includes('crédito') || 
-          descLower.includes('credito') || 
-          descLower.includes('resgate') || 
-          descLower.includes('restituição') || 
-          descLower.includes('restituicao') ||
-          descLower.includes('remuneração') ||
-          descLower.includes('salário') ||
-          descLower.includes('salario')
-        )) {
-          amountParsed = Math.abs(amountParsed);
         }
 
         return {
@@ -269,8 +260,8 @@ function postProcessTransactions(transactions) {
 
     const descLower = t.description.toLowerCase();
     if (descLower.includes('saldo anterior') || descLower.includes('saldo final') ||
-        descLower.includes('saldo do dia') || descLower.includes('total de') ||
-        descLower.includes('s/anterior') || descLower.includes('saldo inicial')) {
+      descLower.includes('saldo do dia') || descLower.includes('total de') ||
+      descLower.includes('s/anterior') || descLower.includes('saldo inicial')) {
       continue;
     }
 

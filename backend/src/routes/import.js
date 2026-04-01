@@ -17,8 +17,17 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
     let rawTransactions = [];
     let discoveredTitular = null;
 
+    const [categoriesRes, rulesRes] = await Promise.all([
+      supabase.from('categories').select('*').or(`user_id.eq.${user.id},is_system.eq.true`),
+      supabase.from('ai_rules').select('*, categories(name)').eq('user_id', user.id).eq('is_active', true),
+    ]);
+
+    const userRules = (rulesRes.data || []).map(r => ({ keyword: r.keyword, category_name: r.categories?.name }));
+    const catList = categoriesRes.data || [];
+    const categoryNames = catList.map(c => c.name);
+
     if (fileType === 'pdf') {
-      const result = await extractTransactionsFromPDF(fileBuffer);
+      const result = await extractTransactionsFromPDF(fileBuffer, categoryNames);
       rawTransactions = result.transactions;
       discoveredTitular = result.titular;
     } else if (fileType === 'ofx') {
@@ -41,14 +50,6 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
       await supabase.from('imports').update({ status: 'empty', total_transactions: 0 }).eq('id', importRecordId);
       return;
     }
-
-    const [categories, rules] = await Promise.all([
-      supabase.from('categories').select('*').or(`user_id.eq.${user.id},is_system.eq.true`),
-      supabase.from('ai_rules').select('*, categories(name)').eq('user_id', user.id).eq('is_active', true),
-    ]);
-
-    const userRules = (rules.data || []).map(r => ({ keyword: r.keyword, category_name: r.categories?.name }));
-    const catList = categories.data || [];
 
     let imported = 0;
     let duplicates = 0;
@@ -86,14 +87,12 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
 
       let aiConfidence = null;
       if (!categoryId) {
-        try {
-          const aiResult = await categorizeTransaction(raw.description, raw.amount, catList, userRules);
-          const cat = catList.find(c => c.name === aiResult.category);
-          categoryId = cat?.id;
-          aiConfidence = aiResult.confidence ?? null;
-        } catch (e) { }
+        // Find 'Outros' or leave null so the user categorizes it on the frontend UI.
+        const catOutros = catList.find(c => c.name === 'Outros');
+        categoryId = catOutros ? catOutros.id : null;
+        aiConfidence = 0.5; // low confidence, user must review
       } else {
-        aiConfidence = 1.0; // matched by rule — high confidence
+        aiConfidence = 1.0; // matched by rule or exact name — high confidence
       }
 
       // Regra Lógica: Identificar transferências para não impactar Receita/Despesa (exceto salários)
