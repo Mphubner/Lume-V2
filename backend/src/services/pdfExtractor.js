@@ -210,7 +210,7 @@ ${catRule}
   async function callGeminiExtraction(retries = 3, delay = 4000) {
     if (!geminiKey) return null; // Skip if not configured
     
-    const model = process.env.AI_MODEL_EXTRACTION_GEMINI || 'gemini-2.5-flash';
+    const model = process.env.AI_MODEL_EXTRACTION_GEMINI || 'gemini-1.5-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
 
     try {
@@ -316,19 +316,6 @@ ${catRule}
     }
   }
 
-  // ─── Execute: Try Gemini first, then Groq ──────────────────────────────────
-  let result = await callGeminiExtraction();
-  
-  if (!result) {
-    if (geminiKey) console.warn('⚠️ Gemini falhou para este chunk. Tentando Groq como fallback...');
-    result = await callGroqExtraction();
-  }
-
-  if (!result || !result.content) {
-    console.error('❌ Both AI providers failed for this chunk.');
-    return { titular: null, transactions: [] };
-  }
-
   // ─── Parse the JSON response ─────────────────────
   
   function extractJSON(str) {
@@ -343,12 +330,66 @@ ${catRule}
     cleaned = cleaned.replace(/,\s*([\]}])/g, '$1');
     try { return JSON.parse(cleaned); } catch(e) {}
     
-    console.error('Raw response failing parse:', str.substring(0, 1000));
+    // SALVAGE: Regex extract tuples for truncated/busted JSON
+    console.warn('⚠️ JSON Parse falhou. Tentando extração agressiva por regex...');
+    const tuples = [];
+    const r = /\[\s*("(?:\\"|[^"])*")\s*,\s*("(?:\\"|[^"])*")\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*("(?:\\"|[^"])*")\s*,\s*(null|"(?:\\"|[^"])*")\s*\]/g;
+    let m;
+    while ((m = r.exec(str)) !== null) {
+      try {
+        tuples.push([
+          JSON.parse(m[1]), 
+          JSON.parse(m[2]), 
+          parseFloat(m[3]), 
+          JSON.parse(m[4]), 
+          m[5] === 'null' ? null : JSON.parse(m[5])
+        ]);
+      } catch(e) {}
+    }
+    
+    if (tuples.length > 0) {
+      console.log(`✅ Regex salvager successfully rescued ${tuples.length} tuples from broken JSON.`);
+      return { t: tuples, titular: 'Desconhecido' };
+    }
+
     throw new Error('Raw response not parsable');
   }
 
+  // ─── Execute: Try Gemini first, then Groq ──────────────────────────────────
+  let result = null;
+  let parsed = null;
+
+  if (geminiKey) {
+    result = await callGeminiExtraction();
+    if (result && result.content) {
+      try {
+        parsed = extractJSON(result.content);
+      } catch (e) {
+        console.warn('⚠️ Gemini devolveu conteúdo ilegível. Entrando em fallback...', result.content.substring(0, 150));
+        parsed = null;
+      }
+    }
+  }
+  
+  // Se falhou (timeout) ou retornou lixo (parse failed), chama o Groq
+  if (!parsed) {
+    if (geminiKey && !result) console.warn('⚠️ Gemini falhou na rede. Tentando Groq como fallback...');
+    result = await callGroqExtraction();
+    if (result && result.content) {
+      try {
+        parsed = extractJSON(result.content);
+      } catch (e) {
+        console.error('❌ Groq também devolveu JSON quebrado:', result.content.substring(0, 150));
+      }
+    }
+  }
+
+  if (!parsed) {
+    console.error('❌ Ambos os provedores falharam em retornar um formato legível para este chunk.');
+    return { titular: null, transactions: [] };
+  }
+
   try {
-    const parsed = extractJSON(result.content);
     const titular = parsed.titular || null;
     
     const rawTuples = parsed.t || [];
