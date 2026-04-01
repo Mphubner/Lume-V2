@@ -29,7 +29,8 @@ export async function extractTransactionsFromPDF(buffer, categories = []) {
   const cleanedText = preprocessBankText(rawText);
 
   // Step 3: Split into chunks if too large (Groq has token limits)
-  const chunks = splitIntoChunks(cleanedText, 14000);
+  // 5000 chars is roughly 1500-2000 tokens.
+  const chunks = splitIntoChunks(cleanedText, 5000);
 
   // Step 4: Send each chunk to AI for structured extraction
   let allTransactions = [];
@@ -125,7 +126,7 @@ async function extractWithAI(textChunk, categories = []) {
   const baseUrl = baseUrls[provider] || baseUrls.groq;
   const model = process.env.AI_MODEL_EXTRACTION || 'llama-3.1-8b-instant';
 
-  const catRule = categories && categories.length > 0 
+  const catRule = categories && categories.length > 0
     ? `6. A "categoria" da transação DEVE ser EXATAMENTE uma da lista abaixo, a que mais fizer sentido. Se nenhuma se encaixar, coloque "Outros".\nLISTA DE CATEGORIAS:\n[${categories.join(', ')}]`
     : `6. Estime uma "categoria" financeira básica (ex: Alimentação, Transporte, Moradia, Outros).`;
 
@@ -169,15 +170,15 @@ ${textChunk}
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userMessage },
           ],
-          temperature: 0.05, 
-          max_tokens: 1800, // Reduced token size for large files chunking
+          temperature: 0.05,
+          max_tokens: 1500, // Reduced token size for large files chunking
           response_format: { type: 'json_object' },
         }),
       });
 
       if (!response.ok) {
         const errText = await response.text();
-        
+
         // Dynamic Rate Limit parsing
         if (response.status === 429 && retries > 0) {
           let dynamicDelay = delay;
@@ -185,7 +186,7 @@ ${textChunk}
           if (waitMatch && waitMatch[1]) {
             dynamicDelay = (parseFloat(waitMatch[1]) + 0.5) * 1000;
           }
-          console.warn(`⏳ AI Rate limite atingido (429). Aguardando ${(dynamicDelay/1000).toFixed(1)}s para tentar novamente...`);
+          console.warn(`⏳ AI Rate limite atingido (429). Aguardando ${(dynamicDelay / 1000).toFixed(1)}s para tentar novamente...`);
           await new Promise(resolve => setTimeout(resolve, Math.max(dynamicDelay, 2000)));
           return makeRequest(retries - 1, delay * 1.5);
         }
