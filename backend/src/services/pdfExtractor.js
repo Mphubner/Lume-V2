@@ -110,10 +110,7 @@ function splitIntoChunks(text, maxChars) {
   return chunks;
 }
 
-/**
- * Call Groq AI with optimized prompt for Brazilian bank statement extraction
- */
-async function extractWithAI(textChunk) {
+async function extractWithAI(textChunk, categories = []) {
   const apiKey = process.env.AI_API_KEY;
   if (!apiKey) {
     console.warn('⚠️ AI API key not configured — cannot extract PDF transactions.');
