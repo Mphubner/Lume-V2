@@ -84,10 +84,17 @@ function preprocessBankText(text) {
     /Dias\s+úteis\s+das\s+\d{2}h\s+às\s+\d{2}h/gi,
     /^\s*\d+\s+de\s+\d+\s*$/gm,
     /Saldo\s+ao\s+final\s+do\s+dia[:\s]+[^\n]+/gi,
-    // Específico do Inter
+    // Específicos de Bancos Tradicionais e Digitais (Limpeza Categórica)
     /Fale\s+com\s+a\s+gente/gi,
     /Deficiência\s+de\s+fala\s+e\s+audição[^\n]*/gi,
-    /Solicitado\s+em[:\s]+[^\n]+/gi
+    /Solicitado\s+em[:\s]+[^\n]+/gi,
+    /Extrato\s+de\s+Conta[^\n]*/gi,
+    /Cooperativa\s*\/?\s*PA\s*:\s*\d+[^\n]*/gi,
+    /Conta\s+(Corrente|Capital)[^\n]*/gi,
+    /Nubank\s+-\s+Nu\s+Pagamentos[^\n]*/gi,
+    /SICOOB\s+-\s+Sistema[^\n]*/gi,
+    /Histórico\s+de\s+movimentações[^\n]*/gi,
+    /Ita[úu]\s+Unibanco[^\n]*/gi,
   ];
 
   for (const pattern of noisePatterns) {
@@ -229,15 +236,52 @@ ${textChunk}
         if (typeof val === 'number') {
           amountParsed = val;
         } else if (typeof val === 'string') {
-          // Trata formatos "80.000,00" removendo pontos e trocando virgula por ponto -> "80000.00"
-          const cleanStr = val.replace(/\./g, '').replace(',', '.');
+          const cleanStr = val.replace(/\./g, '').replace(',', '.').replace(/[^\d.-]/g, '');
           amountParsed = parseFloat(cleanStr);
         }
 
+        const descriptionStr = t.descricao || t.description || '';
+        const descLower = descriptionStr.toLowerCase();
+        
+        // --- DUPLA VALIDAÇÃO SEMÂNTICA DE NATUREZA (Baseada na Descrição do Extrato) ---
+        // Pega o valor lido como absoluto para ignorar sinais pendurados no texto mal quebrado
+        let finalAmount = Math.abs(amountParsed);
+        if (isNaN(finalAmount)) finalAmount = 0;
+
+        // Entradas Forçadas (+X)
+        if (
+          descLower.includes('recebid') || 
+          descLower.includes('resgate') || 
+          descLower.includes('devolvid') || 
+          descLower.includes('crédito') || 
+          descLower.includes('credito') || 
+          descLower.includes('remuneração') || 
+          descLower.includes('salário') || 
+          descLower.includes('salario')
+        ) {
+          finalAmount = finalAmount * 1; 
+        } 
+        // Saídas Forçadas (-X)
+        else if (
+          descLower.includes('enviad') || 
+          descLower.includes('compra') || 
+          descLower.includes('pagamento') || 
+          descLower.includes('aplicacao') || 
+          descLower.includes('aplicação') || 
+          descLower.includes('saque')
+        ) {
+          finalAmount = finalAmount * -1;
+        }
+        // Fallback: se não tiver trigger verbal, mantém o original enviado pela IA
+        else {
+          finalAmount = amountParsed;
+        }
+        // -------------------------------------------------------------------------------
+
         return {
           date: t.data || t.date,
-          description: t.descricao || t.description || '',
-          amount: isNaN(amountParsed) ? 0 : amountParsed,
+          description: descriptionStr,
+          amount: isNaN(finalAmount) ? 0 : finalAmount,
           category: t.categoria || t.category || null,
         };
       });
