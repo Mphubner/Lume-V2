@@ -175,9 +175,11 @@ async function extractWithAI(textChunk, categories = []) {
     return { titular: null, transactions: [] };
   }
 
-  const catRule = categories && categories.length > 0
-    ? `6. A "categoria" da transação DEVE ser EXATAMENTE uma da lista abaixo, a que mais fizer sentido. Se nenhuma se encaixar, coloque "Outros".\nLISTA DE CATEGORIAS:\n[${categories.join(', ')}]`
-    : `6. Estime uma "categoria" financeira básica.`;
+  const catRule = categories && Object.keys(categories).length > 0
+    ? `6. Você DEVE extrair a "categoria" e uma "subcategoria" da transação. As categorias disponíveis e suas respectivas subcategorias estão no DICIONÁRIO ABAIXO. Escolha a que melhor se encaixa. Se nenhuma servir PERFEITAMENTE, você pode inventar uma subcategoria genérica ou colocar nulo.
+DICIONÁRIO DE CATEGORIAS:
+${JSON.stringify(categories, null, 2)}`
+    : `6. Estime uma "categoria" financeira básica e uma "subcategoria" correspondente.`;
 
   const systemPrompt = `Você é um extrator financeiro rigoroso de extratos bancários brasileiros.
 Seu objetivo é extrair TODAS as transações sem omitir NENHUMA.
@@ -196,13 +198,13 @@ ${catRule}
 ### Formato de Saída OBRIGATÓRIO (Minitupla):
 {
   "titular": "Nome",
-  "t": [
-    ["13/01/2026", "Pix enviado Maria", -150.00, "Alimentação"],
-    ["13/01/2026", "Recebido João", 200.00, "Outros"]
+    "t": [
+    ["13/01/2026", "Pix enviado Maria", -150.00, "Saúde", "Academia"],
+    ["13/01/2026", "Recebido João", 200.00, "Outros", null]
   ]
 }`;
 
-  const userMessage = `Extraia TODAS as transações e as formate na chave "t" como um array de listas (Data, Descrição, Valor Float e Categoria).\n\n--- EXTRATO ---\n${textChunk}\n--- FIM ---`;
+  const userMessage = `Extraia TODAS as transações e as formate na chave "t" como um array de listas (Data, Descrição, Valor Float, Categoria, Subcategoria).\n\n--- EXTRATO ---\n${textChunk}\n--- FIM ---`;
 
   // ─── Gemini Flash Call ──────────────────────────────────────────────────────
   async function callGeminiExtraction(retries = 3, delay = 4000) {

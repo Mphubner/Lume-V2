@@ -15,9 +15,9 @@ const SHEET_VARIANTS = {
 };
 
 const MODAL_VARIANTS = {
-  hidden: { opacity: 0, scale: 0.95, y: 20 },
-  visible: { opacity: 1, scale: 1, y: 0, transition: { type: 'spring', damping: 25, stiffness: 300 } },
-  exit: { opacity: 0, scale: 0.95, y: 20, transition: { duration: 0.2 } },
+  hidden: { opacity: 0, scale: 0.95, x: '-50%', y: '-40%' },
+  visible: { opacity: 1, scale: 1, x: '-50%', y: '-50%', transition: { type: 'spring', damping: 25, stiffness: 300 } },
+  exit: { opacity: 0, scale: 0.95, x: '-50%', y: '-40%', transition: { duration: 0.2 } },
 };
 
 export default function BottomSheet({ isOpen, onClose, title, children, maxWidth = 520 }) {

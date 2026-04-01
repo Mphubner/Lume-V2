@@ -12,7 +12,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 router.use(authMiddleware);
 
 // Processamento Assíncrono da Fila
-async function processImportBackground(user, fileBuffer, fileType, importRecordId, accountId, memberId) {
+async function processImportBackground(user, fileBuffer, fileType, importRecordId, accountId, memberId, accountType, familyId) {
   try {
     let rawTransactions = [];
     let discoveredTitular = null;
@@ -24,10 +24,15 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
 
     const userRules = (rulesRes.data || []).map(r => ({ keyword: r.keyword, category_name: r.categories?.name }));
     const catList = categoriesRes.data || [];
-    const categoryNames = catList.map(c => c.name);
+    
+    // Construir dicionário hierárquico para a IA: { "Saúde": ["Academia", "Exames"], ... }
+    const catDict = {};
+    for (const c of catList) {
+      catDict[c.name] = Array.isArray(c.subcategories) ? c.subcategories : [];
+    }
 
     if (fileType === 'pdf') {
-      const result = await extractTransactionsFromPDF(fileBuffer, categoryNames);
+      const result = await extractTransactionsFromPDF(fileBuffer, catDict);
       rawTransactions = result.transactions;
       discoveredTitular = result.titular;
     } else if (fileType === 'ofx') {
@@ -80,18 +85,21 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
       if (existing?.length > 0) { duplicates++; continue; }
 
       let categoryId = null;
+      let subcategoryName = null;
       const descLower = raw.description.toLowerCase();
       const matchedRule = userRules.find(r => descLower.includes(r.keyword.toLowerCase()));
       
       if (matchedRule) {
         const cat = catList.find(c => c.name === matchedRule.category_name);
         categoryId = cat?.id;
+        subcategoryName = matchedRule.subcategory || null; // if rule has subcategory
         if (matchedRule.id) {
           await supabase.from('ai_rules').update({ usage_count: matchedRule.usage_count + 1 }).eq('id', matchedRule.id);
         }
       } else if (raw.category) {
         const cat = catList.find(c => c.name.toLowerCase() === raw.category.toLowerCase());
         categoryId = cat?.id;
+        subcategoryName = raw.subcategory || null;
       }
 
       let aiConfidence = null;
@@ -120,8 +128,11 @@ async function processImportBackground(user, fileBuffer, fileType, importRecordI
         await supabase.from('transactions').insert({
           user_id: user.id,
           account_id: accountId,
+          account_type: accountType || 'personal',
+          family_id: familyId || null,
           member_id: memberId,
           category_id: categoryId,
+          subcategory: subcategoryName,
           description: raw.description,
           raw_description: raw.description,
           amount: correctedAmount,
@@ -179,8 +190,10 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 
     if (error) throw error;
 
-    // Fire and Forget (Lança o processo pesado em background no event loop e NÃO aguarda)
-    processImportBackground(req.user, req.file.buffer, fileType, importRecord.id, account_id, member_id);
+    // Fire and Forget (Lança o processo pesado em background)
+    // Precisamos buscar account_type e family_id para preencher nas transactions, senão elas ficam invisíveis no filtro de Workspace!
+    const { data: accData } = await supabase.from('accounts').select('type, account_type, family_id').eq('id', account_id).single();
+    processImportBackground(req.user, req.file.buffer, fileType, importRecord.id, account_id, member_id, accData?.account_type, accData?.family_id);
 
     // Responde instantaneamente
     res.status(202).json({
@@ -227,7 +240,7 @@ router.get('/pending', async (req, res) => {
 // PATCH /api/import/reconcile/:id — Approve or correct a pending transaction
 router.patch('/reconcile/:id', async (req, res) => {
   try {
-    const { category_id, approved } = req.body;
+    const { category_id, subcategory, approved } = req.body;
     const { id } = req.params;
 
     // Fetch original to detect category change for ML learning
@@ -239,6 +252,7 @@ router.patch('/reconcile/:id', async (req, res) => {
       .single();
 
     const updatePayload = { is_reconciled: true };
+    if (subcategory !== undefined) updatePayload.subcategory = subcategory;
     
     // Auto-correct transaction TYPE, is_internal_transfer, and amount sign
     if (category_id) {
@@ -266,12 +280,18 @@ router.patch('/reconcile/:id', async (req, res) => {
     if (category_id && original?.category_id && category_id !== original.category_id && updatePayload.type) {
       const { data: newCatName } = await supabase.from('categories').select('name').eq('id', category_id).single();
       if (newCatName && original.description) {
-        const keyword = original.description.split(' ').slice(0, 3).join(' ').toLowerCase();
+        // Melhora na palavra-chave (remove stopwords para ficar mais genérica nos lugares certos, mas grande o suficiente)
+        const stopWords = ['compra', 'pagamento', 'pix', 'de', 'do', 'da', 'no', 'na', 'em', 'para', 'recebido', 'enviado', 'transferencia', 'ted', 'doc', 'cartao', 'debito', 'credito', 'nf'];
+        let words = original.description.toLowerCase().replace(/[^a-z0-9 ]/g, '').split(' ').filter(w => w.length > 2 && !stopWords.includes(w));
+        let keyword = words.slice(0, 3).join(' '); // 3 meaningfully descriptive words
+        if (!keyword) keyword = original.description.toLowerCase().replace(/[^a-z0-9 ]/g, '').split(' ').slice(0, 3).join(' ');
+        
         // Upsert rule — avoid duplicates
         await supabase.from('ai_rules').upsert({
           user_id: req.user.id,
           keyword,
           category_id,
+          subcategory: subcategory || null,
           is_active: true,
           usage_count: 1,
         }, { onConflict: 'user_id,keyword', ignoreDuplicates: false });

@@ -224,8 +224,20 @@ export default function ReconciliationPage() {
                       <div style={{ flex: 1, minWidth: 200 }}>
                         <div style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.2rem' }}>{tx.description}</div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          {tx.date} · {tx.accounts?.name || 'Conta desconhecida'}
+                          {formatDate(tx.date)} · {tx.accounts?.name || 'Conta desconhecida'}
                         </div>
+                      </div>
+
+                      {/* Category Badge */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', padding: '0 0.5rem', minWidth: 140 }}>
+                        <span className="badge" style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
+                          {tx.categories?.icon} {tx.categories?.name || 'Sem categoria'}
+                        </span>
+                        {tx.subcategory && (
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}>
+                            <span style={{ opacity: 0.5, marginRight: '4px' }}>↳</span> {tx.subcategory}
+                          </span>
+                        )}
                       </div>
 
                       {/* Amount */}
@@ -315,22 +327,36 @@ export default function ReconciliationPage() {
                           <label style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Categoria</label>
                           <select
                             value={editForm.category_id}
-                            onChange={e => setEditForm(f => ({ ...f, category_id: e.target.value }))}
+                            onChange={e => setEditForm(f => ({ ...f, category_id: e.target.value, subcategory: '' }))}
                             style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.85rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--form-bg)', color: 'var(--text-primary)' }}
                           >
-                            <option value="">Manter categoria atual</option>
-                            {categories.filter(c => !c.parent_id).map(parent => {
-                              const children = categories.filter(c => c.parent_id === parent.id);
-                              return children.length > 0 ? (
-                                <optgroup key={parent.id} label={`${parent.icon} ${parent.name}`}>
-                                  {children.map(child => (
-                                    <option key={child.id} value={child.id}>{child.icon} {child.name}</option>
-                                  ))}
-                                </optgroup>
-                              ) : (
-                                <option key={parent.id} value={parent.id}>{parent.icon} {parent.name}</option>
-                              );
-                            })}
+                            <option value="">Selecione...</option>
+                            {Object.entries(
+                              categories.reduce((acc, cat) => {
+                                const group = cat.group_name || 'Personalizadas';
+                                if (!acc[group]) acc[group] = [];
+                                acc[group].push(cat);
+                                return acc;
+                              }, {})
+                            ).map(([group, cats]) => (
+                              <optgroup key={group} label={group}>
+                                {cats.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+                              </optgroup>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={{ flex: '1 1 150px' }}>
+                          <label style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Subcategoria</label>
+                          <select
+                            value={editForm.subcategory || ''}
+                            onChange={e => setEditForm(f => ({ ...f, subcategory: e.target.value }))}
+                            style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.85rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--form-bg)', color: 'var(--text-primary)' }}
+                            disabled={!editForm.category_id}
+                          >
+                            <option value="">- Nenhuma -</option>
+                            {categories.find(c => c.id === editForm.category_id)?.subcategories?.map(sub => (
+                              <option key={sub} value={sub}>{sub}</option>
+                            ))}
                           </select>
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>

@@ -39,6 +39,10 @@ export default function TransactionsPage() {
   const [editingTx, setEditingTx] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [family, setFamily] = useState([]);
+  const [rowSelection, setRowSelection] = useState({});
+  const [bulkActionBusy, setBulkActionBusy] = useState(false);
+  const [showBulkEditModal, setShowBulkEditModal] = useState(false);
+  const [bulkEditForm, setBulkEditForm] = useState({ category_id: '', subcategory: '' });
 
   useEffect(() => {
     loadData();
@@ -75,6 +79,7 @@ export default function TransactionsPage() {
         setTotal(result.total || 0);
         setTotalPages(result.totalPages || 1);
       }
+      setRowSelection({}); // reset selection on new load
     } catch {
       // Demo fallback
       setTransactions([
@@ -137,6 +142,29 @@ export default function TransactionsPage() {
   // TanStack Table setup
   const columns = [
     {
+      id: 'select',
+      header: ({ table }) => (
+        <input
+          type="checkbox"
+          checked={table.getIsAllPageRowsSelected()}
+          indeterminate={table.getIsSomePageRowsSelected()}
+          onChange={table.getToggleAllPageRowsSelectedHandler()}
+          style={{ width: '1rem', height: '1rem', cursor: 'pointer' }}
+        />
+      ),
+      cell: ({ row }) => (
+        <div onClick={e => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={row.getIsSelected()}
+            disabled={!row.getCanSelect()}
+            onChange={row.getToggleSelectedHandler()}
+            style={{ width: '1rem', height: '1rem', cursor: 'pointer' }}
+          />
+        </div>
+      ),
+    },
+    {
       accessorKey: 'date',
       header: 'Data',
       cell: info => <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{formatDate(info.getValue())}</span>,
@@ -153,9 +181,12 @@ export default function TransactionsPage() {
       cell: info => {
         const row = info.row.original;
         return (
-          <span className="badge" style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
-            {row.categories?.icon} {row.categories?.name || 'Sem categoria'}
-          </span>
+          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+            <span className="badge" style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+              {row.categories?.icon} {row.categories?.name || 'Sem categoria'}
+            </span>
+            {row.subcategory && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>↳ {row.subcategory}</span>}
+          </div>
         );
       }
     },
@@ -177,11 +208,55 @@ export default function TransactionsPage() {
   const table = useReactTable({
     data: transactions,
     columns,
-    state: { sorting },
+    state: { sorting, rowSelection },
+    enableRowSelection: true,
+    onRowSelectionChange: setRowSelection,
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
+
+  const selectedRows = table.getSelectedRowModel().flatRows.map(r => r.original);
+
+  const handleBulkDelete = async () => {
+    if (selectedRows.length === 0) return;
+    if (!window.confirm(`Tem certeza que deseja excluir as ${selectedRows.length} transações selecionadas permanentemente?`)) return;
+    
+    setBulkActionBusy(true);
+    try {
+      for (const tx of selectedRows) {
+        await api.deleteTransaction(tx.id);
+      }
+      setRowSelection({});
+      loadData();
+    } catch (err) {
+      alert('Erro ao excluir algumas transações: ' + err.message);
+    } finally {
+      setBulkActionBusy(false);
+    }
+  };
+
+  const handleBulkEditSubmit = async (e) => {
+    e.preventDefault();
+    if (selectedRows.length === 0 || !bulkEditForm.category_id) return;
+    
+    setBulkActionBusy(true);
+    try {
+      for (const tx of selectedRows) {
+        await api.updateTransaction(tx.id, { 
+          category_id: bulkEditForm.category_id,
+          subcategory: bulkEditForm.subcategory || null
+        });
+      }
+      setShowBulkEditModal(false);
+      setRowSelection({});
+      loadData();
+    } catch (err) {
+      alert('Erro ao atualizar: ' + err.message);
+    } finally {
+      setBulkActionBusy(false);
+    }
+  };
 
   return (
     <div>
@@ -265,37 +340,78 @@ export default function TransactionsPage() {
             </div>
           </div>
         ) : activeTab === 'all' ? (
-          <div className="table-responsive" style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem', textAlign: 'left' }}>
-              <thead>
-                {table.getHeaderGroups().map(headerGroup => (
-                  <tr key={headerGroup.id} style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
-                    {headerGroup.headers.map(header => (
-                      <th 
-                        key={header.id} 
-                        onClick={header.column.getToggleSortingHandler()} 
-                        style={{ padding: '1rem', color: 'var(--text-muted)', fontWeight: 600, cursor: header.column.getCanSort() ? 'pointer' : 'default', whiteSpace: 'nowrap', textAlign: header.id === 'amount' ? 'right' : 'left' }}
-                      >
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                        {{ asc: ' 🔼', desc: ' 🔽' }[header.column.getIsSorted()] ?? null}
-                      </th>
-                    ))}
-                  </tr>
-                ))}
-              </thead>
-              <tbody>
-                {table.getRowModel().rows.map(row => (
-                  <tr key={row.id} style={{ borderBottom: '1px solid var(--border-color)', transition: 'background 0.2s' }} className="table-row-hover">
-                    {row.getVisibleCells().map(cell => (
-                      <td key={cell.id} style={{ padding: '1rem' }}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            {selectedRows.length > 0 && (
+              <div style={{ 
+                padding: '0.75rem 1rem', 
+                background: 'var(--color-primary-fade)', 
+                borderBottom: '1px solid var(--border-color)', 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center',
+                borderTopLeftRadius: 'var(--border-radius-lg)',
+                borderTopRightRadius: 'var(--border-radius-lg)'
+              }}>
+                <span style={{ fontWeight: 600, color: 'var(--color-primary)' }}>
+                  {selectedRows.length} selecionada(s)
+                </span>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button 
+                    className="btn btn-secondary btn-sm" 
+                    onClick={() => setShowBulkEditModal(true)}
+                    disabled={bulkActionBusy}
+                    style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)', background: 'transparent' }}
+                  >
+                    ✏️ Editar Categorias
+                  </button>
+                  <button 
+                    className="btn btn-secondary btn-sm" 
+                    onClick={handleBulkDelete}
+                    disabled={bulkActionBusy}
+                    style={{ borderColor: 'var(--color-danger)', color: 'var(--color-danger)', background: 'transparent' }}
+                  >
+                    {bulkActionBusy ? '...' : '🗑️ Excluir'}
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="table-responsive" style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem', textAlign: 'left' }}>
+                <thead>
+                  {table.getHeaderGroups().map(headerGroup => (
+                    <tr key={headerGroup.id} style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
+                      {headerGroup.headers.map(header => (
+                        <th 
+                          key={header.id} 
+                          onClick={header.column.getToggleSortingHandler()} 
+                          style={{ padding: '1rem', color: 'var(--text-muted)', fontWeight: 600, cursor: header.column.getCanSort() ? 'pointer' : 'default', whiteSpace: 'nowrap', textAlign: header.id === 'amount' ? 'right' : 'left' }}
+                        >
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          {{ asc: ' 🔼', desc: ' 🔽' }[header.column.getIsSorted()] ?? null}
+                        </th>
+                      ))}
+                    </tr>
+                  ))}
+                </thead>
+                <tbody>
+                  {table.getRowModel().rows.map(row => (
+                    <tr 
+                      key={row.id} 
+                      onClick={() => setEditingTx(row.original)}
+                      style={{ borderBottom: '1px solid var(--border-color)', transition: 'background 0.2s', cursor: 'pointer', background: row.getIsSelected() ? 'var(--bg-secondary)' : 'transparent' }} 
+                      className="table-row-hover"
+                    >
+                      {row.getVisibleCells().map(cell => (
+                        <td key={cell.id} style={{ padding: '0.75rem 1rem' }}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : (
           <div>
             {Object.entries(grouped).sort((a, b) => b[0].localeCompare(a[0])).map(([date, txs]) => (
@@ -308,8 +424,14 @@ export default function TransactionsPage() {
                     <div className={`transaction-dot ${tx.type}`} />
                     <div className="transaction-info">
                       <div className="transaction-desc">{tx.description}</div>
-                      <div className="transaction-meta">
-                        <span>{tx.categories?.icon} {tx.categories?.name || 'Sem categoria'}</span>
+                      <div className="transaction-meta" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <span className="badge" style={{ padding: '2px 6px', fontSize: '0.7rem' }}>{tx.categories?.icon} {tx.categories?.name || 'Sem categoria'}</span>
+                        {tx.subcategory && (
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}>
+                            <span style={{ opacity: 0.5, marginRight: '4px' }}>↳</span> {tx.subcategory}
+                          </span>
+                        )}
+                        <span>· {tx.accounts?.name || 'Manual'}</span>
                       </div>
                     </div>
                     <div className={`transaction-amount ${tx.type === 'income' || tx.amount > 0 ? 'text-success' : 'text-danger'}`}>
@@ -351,10 +473,23 @@ export default function TransactionsPage() {
                 <InlineCategorySelect 
                   categories={categories}
                   value={form.category_id}
-                  onChange={(val) => setForm({ ...form, category_id: val })}
+                  onChange={(val) => setForm({ ...form, category_id: val, subcategory: '' })}
                   typeFilter={form.type}
                   onCategoryCreated={loadDropdownParams}
                 />
+              </div>
+              <div className="form-group">
+                <label>Subcategoria</label>
+                <select 
+                  value={form.subcategory || ''} 
+                  onChange={e => setForm({ ...form, subcategory: e.target.value })}
+                  disabled={!form.category_id}
+                >
+                  <option value="">- Nenhuma -</option>
+                  {categories.find(c => c.id === form.category_id)?.subcategories?.map(sub => (
+                    <option key={sub} value={sub}>{sub}</option>
+                  ))}
+                </select>
               </div>
             </div>
 
@@ -403,6 +538,44 @@ export default function TransactionsPage() {
         }}
         onCategoryCreated={loadDropdownParams}
       />
+
+      {/* Bulk Edit Modal */}
+      <BottomSheet isOpen={showBulkEditModal} onClose={() => setShowBulkEditModal(false)} title="Editar Selecionadas em Massa">
+        <form onSubmit={handleBulkEditSubmit}>
+          <div style={{ paddingBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Você está editando {selectedRows.length} transações simultaneamente. Apenas a categoria e subcategoria serão alteradas.</p>
+            
+            <div className="form-group">
+              <label>Nova Categoria</label>
+              <InlineCategorySelect 
+                categories={categories}
+                value={bulkEditForm.category_id}
+                onChange={(val) => setBulkEditForm({ category_id: val, subcategory: '' })}
+                onCategoryCreated={loadDropdownParams}
+              />
+            </div>
+            
+            <div className="form-group">
+              <label>Nova Subcategoria</label>
+              <select 
+                value={bulkEditForm.subcategory} 
+                onChange={e => setBulkEditForm({ ...bulkEditForm, subcategory: e.target.value })}
+                disabled={!bulkEditForm.category_id}
+              >
+                <option value="">- Nenhuma -</option>
+                {categories.find(c => c.id === bulkEditForm.category_id)?.subcategories?.map(sub => (
+                  <option key={sub} value={sub}>{sub}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
+              <button type="button" className="btn btn-secondary flex-1" onClick={() => setShowBulkEditModal(false)}>Cancelar</button>
+              <button type="submit" className="btn btn-primary flex-1" disabled={bulkActionBusy || !bulkEditForm.category_id}>{bulkActionBusy ? 'Salvando...' : 'Aplicar'}</button>
+            </div>
+          </div>
+        </form>
+      </BottomSheet>
     </div>
   );
 }

@@ -20,6 +20,7 @@ export default function TransactionEditModal({
     date: '',
     type: 'expense',
     category_id: '',
+    subcategory: '',
     account_id: '',
     member_id: ''
   });
@@ -33,6 +34,7 @@ export default function TransactionEditModal({
         date: transaction.date || '',
         type: transaction.type || 'expense',
         category_id: transaction.category_id || '',
+        subcategory: transaction.subcategory || '',
         account_id: transaction.account_id || '',
         member_id: transaction.member_id || ''
       });
@@ -52,6 +54,7 @@ export default function TransactionEditModal({
       date: form.date,
       type: form.type,
       category_id: form.category_id || null,
+      subcategory: form.subcategory || null,
       account_id: form.account_id || null,
       member_id: form.member_id || null
     };
@@ -105,11 +108,27 @@ export default function TransactionEditModal({
               <InlineCategorySelect 
                 categories={categories}
                 value={form.category_id}
-                onChange={(val) => setForm({ ...form, category_id: val })}
+                onChange={(val) => setForm({ ...form, category_id: val, subcategory: '' })}
                 typeFilter={form.type}
                 onCategoryCreated={onCategoryCreated}
               />
             </div>
+            <div className="form-group">
+              <label>Subcategoria</label>
+              <select 
+                value={form.subcategory || ''} 
+                onChange={e => setForm({ ...form, subcategory: e.target.value })}
+                disabled={!form.category_id}
+              >
+                <option value="">- Nenhuma -</option>
+                {categories.find(c => c.id === form.category_id)?.subcategories?.map(sub => (
+                  <option key={sub} value={sub}>{sub}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-2" style={{ gap: '1rem' }}>
             <div className="form-group">
               <label>Tipo</label>
               <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value, category_id: '' })}>

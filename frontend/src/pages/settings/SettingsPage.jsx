@@ -156,7 +156,7 @@ export default function SettingsPage() {
         await api.createCategory(newCat); 
       }
       setShowCatModal(false); 
-      setNewCat({ name: '', icon: '📦', type: 'expense', color: '#6366f1' }); 
+      setNewCat({ name: '', icon: '📦', type: 'expense', color: '#6366f1', subcategories: [] }); 
       setEditingCategory(null);
       loadCategories(); 
     } catch (err) { alert('Erro: ' + err.message); }
@@ -176,7 +176,7 @@ export default function SettingsPage() {
 
   const openNewCategory = () => {
     setEditingCategory(null);
-    setNewCat({ name: '', icon: '📦', type: 'expense', color: '#6366f1', parent_id: '', group_name: '', nature: 'variable' });
+    setNewCat({ name: '', icon: '📦', type: 'expense', color: '#6366f1', group_name: '', nature: 'variable', subcategories: [] });
     setShowCatModal(true);
   };
 
@@ -191,9 +191,9 @@ export default function SettingsPage() {
       icon: cat.icon || '📦', 
       type: cat.type || 'expense', 
       color: cat.color || '#6366f1',
-      parent_id: cat.parent_id || '',
       group_name: cat.group_name || '',
-      nature: cat.nature || 'variable'
+      nature: cat.nature || 'variable',
+      subcategories: Array.isArray(cat.subcategories) ? cat.subcategories : []
     });
     setShowCatModal(true);
   };
@@ -296,7 +296,7 @@ export default function SettingsPage() {
                       >
                         {cat.icon} {cat.name}
                         {cat.is_system && <span className="badge badge-info" style={{ padding: '0 0.25rem', fontSize: '0.6rem' }}>sistema</span>}
-                        {cat.parent_id && <span style={{ opacity: 0.4, fontSize: '0.7rem', marginLeft: '0.2rem' }}>↳</span>}
+                        {cat.subcategories && cat.subcategories.length > 0 && <span style={{ opacity: 0.6, fontSize: '0.7rem', marginLeft: '0.2rem' }}>({cat.subcategories.length} sub)</span>}
                         {!cat.is_system && <Edit3 size={12} style={{ opacity: 0.5, marginLeft: '0.25rem' }}/>}
                       </button>
                     ))}
@@ -342,19 +342,40 @@ export default function SettingsPage() {
                       <div className="form-group"><label>Tipo</label><select value={newCat.type} onChange={e => setNewCat({ ...newCat, type: e.target.value })}><option value="expense">Despesa</option><option value="income">Receita</option><option value="both">Ambos</option></select></div>
                     </div>
                     <div className="form-group">
-                      <label>Relacionamento</label>
-                      <select 
-                        value={newCat.parent_id || ''} 
-                        onChange={e => {
-                          const parent = categories.find(c => c.id === e.target.value);
-                          setNewCat({ ...newCat, parent_id: e.target.value, group_name: parent ? parent.group_name : '', nature: parent ? parent.nature : 'variable' });
-                        }}
-                      >
-                        <option value="">Nenhum (Categoria Principal)</option>
-                        {categories.filter(c => !c.parent_id && (!editingCategory || c.id !== editingCategory.id)).map(p => (
-                          <option key={p.id} value={p.id}>{p.icon} {p.name} ({p.group_name || 'Personalizado'})</option>
+                      <label>Subcategorias</label>
+                      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                        <input 
+                          id="new-subcat-input"
+                          placeholder="Digite e aperte Enter..." 
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const val = e.target.value.trim();
+                              if (val && !newCat.subcategories.includes(val)) {
+                                setNewCat({ ...newCat, subcategories: [...newCat.subcategories, val] });
+                                e.target.value = '';
+                              }
+                            }
+                          }}
+                        />
+                        <button type="button" className="btn btn-secondary" onClick={() => {
+                          const input = document.getElementById('new-subcat-input');
+                          const val = input.value.trim();
+                          if (val && !newCat.subcategories.includes(val)) {
+                            setNewCat({ ...newCat, subcategories: [...newCat.subcategories, val] });
+                            input.value = '';
+                          }
+                        }}>Add</button>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                        {newCat.subcategories?.map(sub => (
+                          <span key={sub} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'var(--bg-secondary)' }}>
+                            {sub}
+                            <button type="button" onClick={() => setNewCat({ ...newCat, subcategories: newCat.subcategories.filter(s => s !== sub) })} style={{ background: 'transparent', color: 'var(--text-muted)', border: 'none', cursor: 'pointer', fontSize: '10px' }}>✕</button>
+                          </span>
                         ))}
-                      </select>
+                      </div>
+                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>Essas serão as subcategorias passadas para a IA e listadas nos lançamentos.</p>
                     </div>
                     <div className="form-group">
                       <label>Cor de Identificação</label>
