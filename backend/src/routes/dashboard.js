@@ -30,24 +30,15 @@ router.get('/', async (req, res) => {
     let txQuery = supabase.from('transactions').select('amount, type, date, is_internal_transfer, category_id, categories(name, icon, color)').eq('user_id', req.user.id).gte('date', startDate).lte('date', endDate);
     let debtsQuery = supabase.from('debts').select('current_balance, status').eq('user_id', req.user.id);
     let recurringQuery = supabase.from('recurring_bills').select('*').eq('user_id', req.user.id).eq('status', 'active');
-    let accountsQuery = supabase.from('accounts').select('balance, account_type, family_id').eq('user_id', req.user.id).eq('is_active', true);
+    let accountsQuery = supabase.from('accounts').select('balance').eq('user_id', req.user.id);
     
     // Apply workspace filter to base queries
     if (workspace === 'personal') {
       txQuery = txQuery.eq('account_type', 'personal').is('family_id', null);
-      debtsQuery = debtsQuery.is('family_id', null);
-      recurringQuery = recurringQuery.is('family_id', null);
-      accountsQuery = accountsQuery.eq('account_type', 'personal').is('family_id', null);
     } else if (workspace === 'business') {
       txQuery = txQuery.eq('account_type', 'business').is('family_id', null);
-      debtsQuery = debtsQuery.is('family_id', null);
-      recurringQuery = recurringQuery.is('family_id', null);
-      accountsQuery = accountsQuery.eq('account_type', 'business').is('family_id', null);
     } else if (workspace === 'family') {
       txQuery = txQuery.not('family_id', 'is', null);
-      debtsQuery = debtsQuery.not('family_id', 'is', null);
-      recurringQuery = recurringQuery.not('family_id', 'is', null);
-      accountsQuery = accountsQuery.not('family_id', 'is', null);
     }
 
     const [txResult, recurringResult, debtsResult, goalsResult, reserveResult, healthResult, accountsResult] = await Promise.all([
@@ -111,9 +102,15 @@ router.get('/', async (req, res) => {
 
         // Check which recurring bills hit today
         activeRecurring.forEach(bill => {
-            if (bill.due_day === dayOfMonth) {
-                if (bill.type === 'income') dailyIncome += parseFloat(bill.amount);
-                else if (bill.type === 'expense') dailyExpense += parseFloat(bill.amount);
+            // Treat strictly as number or parse properly
+            const bDay = Number(bill.due_day);
+            if (bDay === dayOfMonth) {
+                // In Lume, recurring_bills are considered expenses by default if no type is defined
+                if (bill.type === 'income') {
+                    dailyIncome += parseFloat(bill.amount || 0);
+                } else {
+                    dailyExpense += parseFloat(bill.amount || 0);
+                }
             }
         });
 

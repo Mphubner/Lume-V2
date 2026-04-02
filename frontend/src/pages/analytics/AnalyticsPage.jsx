@@ -205,7 +205,10 @@ export default function AnalyticsPage() {
                     dataLabels: { enabled: false },
                     stroke: { curve: evolution.length >= 2 ? 'smooth' : 'straight', width: [2, 2, 2], dashArray: [0, 0, 5] },
                     xaxis: { categories: evolution.map(d => d.monthLabel), axisBorder: { show: false }, axisTicks: { show: false }, labels: { style: { colors: '#94a3b8' } } },
-                    yaxis: { labels: { formatter: (val) => formatCurrency(val, true), style: { colors: '#94a3b8' } } },
+                    yaxis: { 
+                      labels: { formatter: (val) => typeof val === 'number' ? formatCurrency(val, true) : val, style: { colors: '#94a3b8' } },
+                      ...(evolution.length > 0 && Math.max(...evolution.map(d => Number(d.balance || 0))) === Math.min(...evolution.map(d => Number(d.balance || 0))) ? { min: Math.min(...evolution.map(d => Number(d.balance || 0))) - 1000, max: Math.max(...evolution.map(d => Number(d.balance || 0))) + 1000 } : {})
+                    },
                     grid: { borderColor: '#334155', strokeDashArray: 4, xaxis: { lines: { show: true } }, yaxis: { lines: { show: true } } },
                     legend: { position: 'top', horizontalAlign: 'right', labels: { colors: '#f8fafc' } },
                     tooltip: { theme: 'dark', y: { formatter: (val) => formatCurrency(val) } }

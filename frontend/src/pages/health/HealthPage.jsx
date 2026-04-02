@@ -84,7 +84,11 @@ export default function HealthPage() {
               dataLabels: { enabled: false },
               markers: { size: 4, colors: ['var(--accent-gold)'] },
               xaxis: { categories: history.map(h => new Date(h.calculated_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })), labels: { style: { colors: '#94a3b8' } }, axisBorder: { show: false }, axisTicks: { show: false } },
-              yaxis: { min: 0, max: 100, labels: { style: { colors: '#94a3b8' } } },
+              yaxis: { 
+                min: (history.length > 0 && Math.max(...history.map(h => Number(h.total_score || 0))) === Math.min(...history.map(h => Number(h.total_score || 0)))) ? 0 : 0, 
+                max: (history.length > 0 && Math.max(...history.map(h => Number(h.total_score || 0))) === Math.min(...history.map(h => Number(h.total_score || 0)))) ? 100 : 100,
+                labels: { style: { colors: '#94a3b8' } }
+              },
               grid: { borderColor: '#334155', strokeDashArray: 4 },
               tooltip: { theme: 'dark' },
             }}

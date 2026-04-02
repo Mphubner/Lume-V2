@@ -147,7 +147,10 @@ export default function ReservePage() {
               dataLabels: { enabled: false },
               fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05, stops: [0, 90, 100] } },
               xaxis: { categories: history.map(h => h.month), labels: { style: { colors: '#94a3b8' } }, axisBorder: { show: false }, axisTicks: { show: false } },
-              yaxis: { labels: { formatter: v => `${(v/1000).toFixed(0)}k`, style: { colors: '#94a3b8' } } },
+              yaxis: { 
+                labels: { formatter: val => typeof val === 'number' ? formatCurrency(val, true) : val, style: { colors: '#94a3b8' } },
+                ...(history.length > 0 && Math.max(...history.map(h => Number(h.amount || 0))) === Math.min(...history.map(h => Number(h.amount || 0))) ? { min: Math.min(...history.map(h => Number(h.amount || 0))) - 1000, max: Math.max(...history.map(h => Number(h.amount || 0))) + 1000 } : {})
+              },
               grid: { borderColor: '#334155', strokeDashArray: 4 },
               tooltip: { theme: 'dark', y: { formatter: v => formatCurrency(v) } },
             }}

@@ -91,7 +91,10 @@ export default function DashboardPage() {
     dataLabels: { enabled: false },
     stroke: { curve: evolutionData.length >= 2 ? 'smooth' : 'straight', width: 2 },
     xaxis: { categories: evolutionData.map(m => m.monthLabel), labels: { style: { colors: '#94a3b8' } }, axisBorder: { show: false }, axisTicks: { show: false } },
-    yaxis: { labels: { style: { colors: '#94a3b8' }, formatter: (v) => `${(v / 1000).toFixed(0)}k` } },
+    yaxis: { 
+      labels: { style: { colors: '#94a3b8' }, formatter: (v) => typeof v === 'number' ? `${(v / 1000).toFixed(0)}k` : v },
+      ...(evolutionData.length > 0 && Math.max(...evolutionData.map(d => Number(d.income || 0)), ...evolutionData.map(d => Number(d.expenses || 0))) === 0 && Math.min(...evolutionData.map(d => Number(d.income || 0)), ...evolutionData.map(d => Number(d.expenses || 0))) === 0 ? { min: -1000, max: 1000 } : {})
+    },
     grid: { borderColor: 'var(--border-color)', strokeDashArray: 3, xaxis: { lines: { show: true } }, yaxis: { lines: { show: true } } },
     tooltip: { theme: 'dark', y: { formatter: (v) => formatCurrency(v) } },
     legend: { labels: { colors: '#94a3b8' }, markers: { width: 10, height: 10, radius: 2 } },
@@ -343,7 +346,10 @@ export default function DashboardPage() {
                   dataLabels: { enabled: false },
                   markers: { size: [0, 4, 4], colors: ['#3b82f6', '#f43f5e', '#22c55e'], hover: { size: 6 } },
                   xaxis: { categories: data.cashFlowProjection.map(d => d.date.substring(5, 10).replace('-', '/')), labels: { style: { colors: '#94a3b8' }, rotate: -30 }, axisBorder: { show: false }, axisTicks: { show: false }, tickAmount: 8 },
-                  yaxis: { labels: { formatter: v => `${(v/1000).toFixed(0)}k`, style: { colors: '#94a3b8' } } },
+                  yaxis: { 
+                    labels: { formatter: v => typeof v === 'number' ? `${(v/1000).toFixed(0)}k` : v, style: { colors: '#94a3b8' } },
+                    ...(Math.max(...data.cashFlowProjection.map(d => Number(d.projectedBalance || 0))) === Math.min(...data.cashFlowProjection.map(d => Number(d.projectedBalance || 0))) ? { min: Math.min(...data.cashFlowProjection.map(d => Number(d.projectedBalance || 0))) - 1000, max: Math.max(...data.cashFlowProjection.map(d => Number(d.projectedBalance || 0))) + 1000 } : {})
+                  },
                   grid: { borderColor: '#334155', strokeDashArray: 4 },
                   legend: { labels: { colors: '#f8fafc' } },
                   tooltip: { theme: 'dark', y: { formatter: v => formatCurrency(v) } },
