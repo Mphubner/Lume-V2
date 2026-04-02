@@ -276,7 +276,7 @@ export default function TransactionsPage() {
 
       {/* Tabs */}
       <div className="tabs" style={{ width: 'fit-content', marginBottom: '1.5rem' }}>
-        {[{ key: 'overview', label: 'Visão Geral' }, { key: 'monthly', label: 'Histórico Mensal' }, { key: 'all', label: 'Todas as Transações' }].map(tab => (
+        {[{ key: 'monthly', label: 'Histórico Mensal' }, { key: 'all', label: 'Todas as Transações' }].map(tab => (
           <button key={tab.key} className={`tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)}>{tab.label}</button>
         ))}
       </div>

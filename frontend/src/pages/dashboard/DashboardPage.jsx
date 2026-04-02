@@ -349,9 +349,9 @@ export default function DashboardPage() {
                   tooltip: { theme: 'dark', y: { formatter: v => formatCurrency(v) } },
                 }}
                 series={[
-                  { name: 'Saldo Projetado', data: data.cashFlowProjection.map(d => d.projectedBalance), type: 'area' },
-                  { name: 'Saída (Contas Fixas)', data: data.cashFlowProjection.map(d => d.expectedExpense), type: 'scatter' },
-                  { name: 'Entrada (Prevista)', data: data.cashFlowProjection.map(d => d.expectedIncome), type: 'scatter' },
+                  { name: 'Saldo Projetado', data: data.cashFlowProjection.map(d => Number(d.projectedBalance || 0)), type: 'area' },
+                  { name: 'Saída (Contas Fixas)', data: data.cashFlowProjection.map(d => Number(d.expectedExpense || 0)), type: 'scatter' },
+                  { name: 'Entrada (Prevista)', data: data.cashFlowProjection.map(d => Number(d.expectedIncome || 0)), type: 'scatter' },
                 ]}
                 type="area"
                 height="100%"
