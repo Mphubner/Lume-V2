@@ -143,7 +143,7 @@ export default function ReservePage() {
               chart: { type: 'area', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
               theme: { mode: 'dark' },
               colors: ['#d4a843'],
-              stroke: { curve: 'straight', width: 2 },
+              stroke: { curve: history.length >= 2 ? 'smooth' : 'straight', width: 2 },
               dataLabels: { enabled: false },
               fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05, stops: [0, 90, 100] } },
               xaxis: { categories: history.map(h => h.month), labels: { style: { colors: '#94a3b8' } }, axisBorder: { show: false }, axisTicks: { show: false } },

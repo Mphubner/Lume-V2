@@ -63,7 +63,8 @@ class ApiService {
 
   // Dashboard
   getDashboard(params = {}) {
-    const qs = new URLSearchParams(params).toString();
+    const cleanParams = Object.fromEntries(Object.entries(params).filter(([_, v]) => v != null && v !== ''));
+    const qs = new URLSearchParams(cleanParams).toString();
     return this.request(`/dashboard?${qs}`);
   }
 
@@ -73,11 +74,13 @@ class ApiService {
 
   // Transactions
   getTransactions(params = {}) {
-    const qs = new URLSearchParams(params).toString();
+    const cleanParams = Object.fromEntries(Object.entries(params).filter(([_, v]) => v != null && v !== ''));
+    const qs = new URLSearchParams(cleanParams).toString();
     return this.request(`/transactions?${qs}`);
   }
   getTransactionSummary(params = {}) {
-    const qs = new URLSearchParams(params).toString();
+    const cleanParams = Object.fromEntries(Object.entries(params).filter(([_, v]) => v != null && v !== ''));
+    const qs = new URLSearchParams(cleanParams).toString();
     return this.request(`/transactions/summary?${qs}`);
   }
   createTransaction(data) { return this.request('/transactions', { method: 'POST', body: data }); }

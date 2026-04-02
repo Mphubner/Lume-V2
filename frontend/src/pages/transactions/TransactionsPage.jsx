@@ -74,7 +74,9 @@ export default function TransactionsPage() {
         setTotalPages(txResult.totalPages || 1);
       } else {
         const extraParams = uncategorizedFilter ? { uncategorized: 'true' } : {};
-        const result = await api.getTransactions({ page, limit: 100, search: search || undefined, ...params, ...extraParams });
+        const queryParams = { page, limit: 100, ...params, ...extraParams };
+        if (search) queryParams.search = search;
+        const result = await api.getTransactions(queryParams);
         setTransactions(result.transactions || []);
         setTotal(result.total || 0);
         setTotalPages(result.totalPages || 1);
