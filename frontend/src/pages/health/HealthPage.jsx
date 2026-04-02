@@ -80,7 +80,7 @@ export default function HealthPage() {
               chart: { type: 'line', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
               theme: { mode: 'dark' },
               colors: ['var(--accent-gold)'],
-              stroke: { curve: history.length >= 2 ? 'smooth' : 'straight', width: 2 },
+              stroke: { curve: history.length >= 2 ? 'straight', width: 2 },
               dataLabels: { enabled: false },
               markers: { size: 4, colors: ['var(--accent-gold)'] },
               xaxis: { categories: history.map(h => new Date(h.calculated_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })), labels: { style: { colors: '#94a3b8' } }, axisBorder: { show: false }, axisTicks: { show: false } },

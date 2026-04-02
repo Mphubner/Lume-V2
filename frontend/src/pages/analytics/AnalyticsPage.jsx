@@ -204,7 +204,7 @@ export default function AnalyticsPage() {
                     colors: ['#22c55e', '#f43f5e', '#facc15'],
                     fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05, stops: [0, 100] } },
                     dataLabels: { enabled: false },
-                    stroke: { curve: evolution.length >= 2 ? 'smooth' : 'straight', width: [2, 2, 2], dashArray: [0, 0, 5] },
+                    stroke: { curve: evolution.length >= 2 ? 'straight', width: [2, 2, 2], dashArray: [0, 0, 5] },
                     xaxis: { categories: evolution.map(d => d.monthLabel), axisBorder: { show: false }, axisTicks: { show: false }, labels: { style: { colors: '#94a3b8' } } },
                     yaxis: { 
                       labels: { formatter: (val) => typeof val === 'number' ? formatCurrency(val, true) : val, style: { colors: '#94a3b8' } },
