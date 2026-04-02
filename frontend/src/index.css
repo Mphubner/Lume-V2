@@ -68,6 +68,38 @@
   --transition-slow: 400ms ease;
 }
 
+/* ---- Global Form Element Contrast (Dark Mode) ---- */
+select,
+input,
+textarea {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-sm);
+  padding: 0.5rem 0.75rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  transition: border-color var(--transition-fast);
+}
+
+select:focus,
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent-gold);
+}
+
+select option,
+select optgroup {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ---- Global Reset ---- */
 *, *::before, *::after {
   box-sizing: border-box;

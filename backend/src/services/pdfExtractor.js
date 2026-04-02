@@ -169,9 +169,9 @@ function splitIntoChunksSafely(text, maxChars) {
 
 async function extractWithAI(textChunk, categories = []) {
   const geminiKey = process.env.GEMINI_API_KEY;
-  const groqKey = process.env.AI_API_KEY;
+  const hasGroqKeys = !!(process.env.GROQ_API_KEYS || process.env.AI_API_KEY);
   
-  if (!geminiKey && !groqKey) {
+  if (!geminiKey && !hasGroqKeys) {
     console.warn('⚠️ No AI API keys configured — cannot extract PDF transactions.');
     return { titular: null, transactions: [] };
   }
@@ -259,62 +259,90 @@ ${catRule}
     }
   }
 
-  // ─── Groq/OpenAI-compatible Call (Fallback) ────────────────────────────────
+  // ─── Groq Multi-Key Rotation ────────────────────────────────────────────────
+  const groqKeys = (process.env.GROQ_API_KEYS || process.env.AI_API_KEY || '').split(',').map(k => k.trim()).filter(Boolean);
+  let groqKeyIndex = extractWithAI._groqKeyIndex || 0;
+
   async function callGroqExtraction(retries = 5, delay = 5000) {
-    if (!groqKey) return null;
+    if (groqKeys.length === 0) return null;
 
     const provider = process.env.AI_PROVIDER || 'groq';
     const baseUrls = { groq: 'https://api.groq.com/openai/v1', together: 'https://api.together.xyz/v1' };
     const baseUrl = baseUrls[provider] || baseUrls.groq;
     const model = process.env.AI_MODEL_EXTRACTION || 'llama-3.1-8b-instant';
 
-    try {
-      const response = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${groqKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userMessage },
-          ],
-          temperature: 0.05,
-          max_tokens: 3500,
-          response_format: { type: 'json_object' },
-        }),
-      });
+    // Tenta cada key disponível quando a atual estoura TPD
+    let keysTriedThisRound = 0;
 
-      if (!response.ok) {
-        const errText = await response.text();
-        if (response.status === 429 && retries > 0) {
-          let dynamicDelay = delay;
-          const minMatch = errText.match(/in (\d+)m([\d.]+)s/);
-          const secMatch = errText.match(/in ([\d.]+)s/);
-          if (minMatch) dynamicDelay = (parseInt(minMatch[1]) * 60 + parseFloat(minMatch[2]) + 2) * 1000;
-          else if (secMatch && secMatch[1]) dynamicDelay = (parseFloat(secMatch[1]) + 2) * 1000;
-          console.warn(`⏳ Groq Rate Limit (429). Aguardando ${(dynamicDelay / 1000).toFixed(1)}s... (${retries - 1} retries restantes)`);
-          await new Promise(r => setTimeout(r, Math.max(dynamicDelay, 3000)));
-          return callGroqExtraction(retries - 1, delay * 1.5);
+    async function attemptWithCurrentKey(retriesLeft, currentDelay) {
+      const currentKey = groqKeys[groqKeyIndex % groqKeys.length];
+
+      try {
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${currentKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userMessage },
+            ],
+            temperature: 0.05,
+            max_tokens: 3500,
+            response_format: { type: 'json_object' },
+          }),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          
+          if (response.status === 429) {
+            const isTPD = errText.includes('TPD') || errText.includes('tokens per day');
+            
+            if (isTPD && keysTriedThisRound < groqKeys.length - 1) {
+              // Rotacionar para a próxima key imediatamente
+              groqKeyIndex = (groqKeyIndex + 1) % groqKeys.length;
+              extractWithAI._groqKeyIndex = groqKeyIndex;
+              keysTriedThisRound++;
+              console.warn(`🔄 Groq key ${groqKeyIndex}/${groqKeys.length} esgotada (TPD). Rotacionando para key ${groqKeyIndex + 1}...`);
+              return attemptWithCurrentKey(retriesLeft, currentDelay);
+            }
+            
+            // Rate limit temporário (TPM/RPM), não diário — espera e tenta de novo
+            if (retriesLeft > 0) {
+              let dynamicDelay = currentDelay;
+              const minMatch = errText.match(/in (\d+)m([\d.]+)s/);
+              const secMatch = errText.match(/in ([\d.]+)s/);
+              if (minMatch) dynamicDelay = (parseInt(minMatch[1]) * 60 + parseFloat(minMatch[2]) + 2) * 1000;
+              else if (secMatch && secMatch[1]) dynamicDelay = (parseFloat(secMatch[1]) + 2) * 1000;
+              console.warn(`⏳ Groq Rate Limit (429). Aguardando ${(dynamicDelay / 1000).toFixed(1)}s... (${retriesLeft - 1} retries restantes)`);
+              await new Promise(r => setTimeout(r, Math.max(dynamicDelay, 3000)));
+              return attemptWithCurrentKey(retriesLeft - 1, currentDelay * 1.5);
+            }
+          }
+          
+          console.error(`Groq extraction error (${response.status}):`, errText.substring(0, 200));
+          return null;
         }
-        console.error(`Groq extraction error (${response.status}):`, errText.substring(0, 200));
+
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content;
+        if (!content) return null;
+        return { content, tokens: data.usage?.total_tokens || 0, provider: `Groq (key ${(groqKeyIndex % groqKeys.length) + 1}/${groqKeys.length})` };
+      } catch (err) {
+        if (retriesLeft > 0) {
+          console.warn(`⏳ Groq Request falhou: ${err.message}. Retentando...`);
+          await new Promise(r => setTimeout(r, currentDelay));
+          return attemptWithCurrentKey(retriesLeft - 1, currentDelay * 1.5);
+        }
         return null;
       }
-
-      const data = await response.json();
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) return null;
-      return { content, tokens: data.usage?.total_tokens || 0, provider: 'Groq' };
-    } catch (err) {
-      if (retries > 0) {
-        console.warn(`⏳ Groq Request falhou: ${err.message}. Retentando...`);
-        await new Promise(r => setTimeout(r, delay));
-        return callGroqExtraction(retries - 1, delay * 1.5);
-      }
-      return null;
     }
+
+    return attemptWithCurrentKey(retries, delay);
   }
 
   // ─── Parse the JSON response ─────────────────────

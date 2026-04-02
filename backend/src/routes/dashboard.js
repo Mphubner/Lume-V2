@@ -8,11 +8,15 @@ router.use(authMiddleware);
 // GET /api/dashboard — Aggregate all data for the main dashboard
 router.get('/', async (req, res) => {
   try {
-    const { period, workspace } = req.query;
+    const { period, workspace, month, year } = req.query;
     const now = new Date();
     let startDate, endDate;
 
-    if (period === 'month') {
+    if (month && year) {
+      // Filtro específico de mês/ano vindo do frontend
+      startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+      endDate = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+    } else if (period === 'month') {
       startDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
       endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
     } else {

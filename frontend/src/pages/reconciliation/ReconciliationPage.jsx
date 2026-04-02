@@ -328,20 +328,11 @@ export default function ReconciliationPage() {
                           <select
                             value={editForm.category_id}
                             onChange={e => setEditForm(f => ({ ...f, category_id: e.target.value, subcategory: '' }))}
-                            style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.85rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--form-bg)', color: 'var(--text-primary)' }}
+                            style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.85rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
                           >
-                            <option value="">Selecione...</option>
-                            {Object.entries(
-                              categories.reduce((acc, cat) => {
-                                const group = cat.group_name || 'Personalizadas';
-                                if (!acc[group]) acc[group] = [];
-                                acc[group].push(cat);
-                                return acc;
-                              }, {})
-                            ).map(([group, cats]) => (
-                              <optgroup key={group} label={group}>
-                                {cats.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
-                              </optgroup>
+                            <option value="" style={{ color: 'var(--text-muted)', background: 'var(--bg-card)' }}>Selecione...</option>
+                            {categories.map(c => (
+                              <option key={c.id} value={c.id} style={{ color: 'var(--text-primary)', background: 'var(--bg-card)' }}>{c.icon} {c.name}</option>
                             ))}
                           </select>
                         </div>
@@ -350,12 +341,12 @@ export default function ReconciliationPage() {
                           <select
                             value={editForm.subcategory || ''}
                             onChange={e => setEditForm(f => ({ ...f, subcategory: e.target.value }))}
-                            style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.85rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--form-bg)', color: 'var(--text-primary)' }}
+                            style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.85rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
                             disabled={!editForm.category_id}
                           >
-                            <option value="">- Nenhuma -</option>
+                            <option value="" style={{ color: 'var(--text-muted)', background: 'var(--bg-card)' }}>- Nenhuma -</option>
                             {categories.find(c => c.id === editForm.category_id)?.subcategories?.map(sub => (
-                              <option key={sub} value={sub}>{sub}</option>
+                              <option key={sub} value={sub} style={{ color: 'var(--text-primary)', background: 'var(--bg-card)' }}>{sub}</option>
                             ))}
                           </select>
                         </div>

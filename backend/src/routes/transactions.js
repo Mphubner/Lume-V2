@@ -25,11 +25,7 @@ router.get('/', async (req, res) => {
       .eq('user_id', req.user.id)
       .order(sort, { ascending: order === 'asc' });
 
-    // Se estivermos buscando uma importação específica, mostramos ambas (aprovadas e não aprovadas).
-    // Caso contrário, ocultamos as não reconciliadas por padrão, a não ser que pedido explícito.
-    if (!import_id && req.query.status !== 'all' && req.query.status !== 'pending') {
-      query = query.neq('is_reconciled', false);
-    }
+    // Filtro de status: apenas para a tela de reconciliação que solicita explicitamente
     if (req.query.status === 'pending') {
       query = query.eq('is_reconciled', false);
     }
