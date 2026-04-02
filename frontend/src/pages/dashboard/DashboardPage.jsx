@@ -166,7 +166,7 @@ export default function DashboardPage() {
             <h3 className="card-title">Gastos por Categoria</h3>
           </div>
           {donutData.length > 0 ? (
-            <Chart options={donutOptions} series={donutData.map(c => c.value)} type="donut" height={280} />
+            <Chart options={donutOptions} series={donutData.map(c => Number(c.value || 0))} type="donut" height={280} />
           ) : (
             <div className="empty-state" style={{ padding: '2rem' }}>
               <p>Sem dados de gastos ainda</p>
@@ -182,8 +182,8 @@ export default function DashboardPage() {
           <Chart 
             options={evolutionOptions} 
             series={[
-              { name: 'Receitas', data: evolutionData.map(m => m.income) },
-              { name: 'Despesas', data: evolutionData.map(m => m.expenses) }
+              { name: 'Receitas', data: evolutionData.map(m => Number(m.income || 0)) },
+              { name: 'Despesas', data: evolutionData.map(m => Number(m.expenses || 0)) }
             ]} 
             type="area" 
             height={280} 

@@ -839,6 +839,7 @@ select {
   padding: 0.875rem 1.25rem;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
+  color: var(--text-primary);
   border-radius: var(--border-radius-full);
   box-shadow: var(--shadow-lg);
   cursor: pointer;

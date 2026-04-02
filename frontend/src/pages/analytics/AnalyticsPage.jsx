@@ -211,9 +211,9 @@ export default function AnalyticsPage() {
                     tooltip: { theme: 'dark', y: { formatter: (val) => formatCurrency(val) } }
                   }}
                   series={[
-                    { name: 'Receitas', type: 'area', data: evolution.map(d => d.income) },
-                    { name: 'Despesas', type: 'area', data: evolution.map(d => d.expenses) },
-                    { name: 'Saldo', type: 'line', data: evolution.map(d => d.balance) }
+                    { name: 'Receitas', type: 'area', data: evolution.map(d => Number(d.income || 0)) },
+                    { name: 'Despesas', type: 'area', data: evolution.map(d => Number(d.expenses || 0)) },
+                    { name: 'Saldo', type: 'line', data: evolution.map(d => Number(d.balance || 0)) }
                   ]}
                   type="area"
                   height="100%"
@@ -281,8 +281,8 @@ export default function AnalyticsPage() {
                       tooltip: { theme: 'dark', y: { formatter: (val) => formatCurrency(val) } }
                     }}
                     series={[
-                      { name: 'Receitas', data: evolution.map(d => d.income) },
-                      { name: 'Despesas', data: evolution.map(d => d.expenses) }
+                      { name: 'Receitas', data: evolution.map(d => Number(d.income || 0)) },
+                      { name: 'Despesas', data: evolution.map(d => Number(d.expenses || 0)) }
                     ]}
                     type="bar"
                     height="100%"
@@ -318,7 +318,7 @@ export default function AnalyticsPage() {
                         legend: { show: false },
                         tooltip: { theme: 'dark', y: { formatter: (val) => formatCurrency(val) } }
                       }}
-                      series={byCategory.map(c => c.total)}
+                      series={byCategory.map(c => Number(c.total || 0))}
                       type="donut"
                       height="100%"
                     />
@@ -365,7 +365,7 @@ export default function AnalyticsPage() {
                       legend: { show: false },
                       tooltip: { theme: 'dark', y: { formatter: v => formatCurrency(v) } },
                     }}
-                    series={[{ name: 'Gasto', data: byCategory.slice(0, 10).map(c => c.total) }]}
+                    series={[{ name: 'Gasto', data: byCategory.slice(0, 10).map(c => Number(c.total || 0)) }]}
                     type="bar"
                     height="100%"
                   />
