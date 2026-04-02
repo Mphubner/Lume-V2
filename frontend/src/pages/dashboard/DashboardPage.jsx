@@ -93,7 +93,10 @@ export default function DashboardPage() {
     xaxis: { categories: evolutionData.map(m => m.monthLabel), labels: { style: { colors: '#94a3b8' } }, axisBorder: { show: false }, axisTicks: { show: false } },
     yaxis: { 
       labels: { style: { colors: '#94a3b8' }, formatter: (v) => typeof v === 'number' ? `${(v / 1000).toFixed(0)}k` : v },
-      ...(evolutionData.length > 0 && Math.max(...evolutionData.map(d => Number(d.income || 0)), ...evolutionData.map(d => Number(d.expenses || 0))) === 0 && Math.min(...evolutionData.map(d => Number(d.income || 0)), ...evolutionData.map(d => Number(d.expenses || 0))) === 0 ? { min: -1000, max: 1000 } : {})
+      ...(evolutionData.length > 0 && Math.max(...evolutionData.map(d => Number(d.income || 0)), ...evolutionData.map(d => Number(d.expenses || 0))) === Math.min(...evolutionData.map(d => Number(d.income || 0)), ...evolutionData.map(d => Number(d.expenses || 0))) ? { 
+        min: Math.min(...evolutionData.map(d => Number(d.income || 0)), ...evolutionData.map(d => Number(d.expenses || 0))) - 1000, 
+        max: Math.max(...evolutionData.map(d => Number(d.income || 0)), ...evolutionData.map(d => Number(d.expenses || 0))) + 1000 
+      } : {})
     },
     grid: { borderColor: 'var(--border-color)', strokeDashArray: 3, xaxis: { lines: { show: true } }, yaxis: { lines: { show: true } } },
     tooltip: { theme: 'dark', y: { formatter: (v) => formatCurrency(v) } },
@@ -169,7 +172,7 @@ export default function DashboardPage() {
             <h3 className="card-title">Gastos por Categoria</h3>
           </div>
           {donutData.length > 0 ? (
-            <Chart options={donutOptions} series={donutData.map(c => Number(c.value || 0))} type="donut" height={280} />
+            <Chart options={donutOptions} series={donutData.map(c => Number(c.value || 0))} type="donut" height={280} width="100%" />
           ) : (
             <div className="empty-state" style={{ padding: '2rem' }}>
               <p>Sem dados de gastos ainda</p>
@@ -189,7 +192,8 @@ export default function DashboardPage() {
               { name: 'Despesas', data: evolutionData.map(m => Number(m.expenses || 0)) }
             ]} 
             type="area" 
-            height={280} 
+            height={280}
+            width="100%" 
           />
         </div>
       </div>
@@ -361,6 +365,7 @@ export default function DashboardPage() {
                 ]}
                 type="area"
                 height="100%"
+                width="100%"
               />
             </div>
           </>

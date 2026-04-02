@@ -197,6 +197,7 @@ export default function AnalyticsPage() {
               <div className="card-header"><h3 className="card-title"><Activity size={18} style={{ color: 'var(--accent-gold)' }} /> Evolução Mensal — Receitas vs Despesas</h3></div>
               <div style={{ height: 320, marginTop: '1rem' }}>
                 <Chart
+                  key={`evolution-chart-${activeTab}`}
                   options={{
                     chart: { type: 'area', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
                     theme: { mode: 'dark' },
@@ -220,6 +221,7 @@ export default function AnalyticsPage() {
                   ]}
                   type="area"
                   height="100%"
+                  width="100%"
                 />
               </div>
             </div>
@@ -270,6 +272,7 @@ export default function AnalyticsPage() {
                 <div className="card-header"><h3 className="card-title">Entradas e Saídas — Histórico Mensal</h3></div>
                 <div style={{ height: 320, marginTop: '1rem' }}>
                   <Chart
+                    key={`cashflow-chart-${activeTab}`}
                     options={{
                       chart: { type: 'bar', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
                       theme: { mode: 'dark' },
@@ -289,6 +292,7 @@ export default function AnalyticsPage() {
                     ]}
                     type="bar"
                     height="100%"
+                    width="100%"
                   />
                 </div>
               </div>
@@ -310,6 +314,7 @@ export default function AnalyticsPage() {
                   <div className="card-header"><h3 className="card-title">Distribuição por Categoria</h3></div>
                   <div style={{ height: 280, marginTop: '1rem' }}>
                     <Chart
+                      key={`donut-chart-${activeTab}`}
                       options={{
                         chart: { type: 'donut', background: 'transparent', fontFamily: 'inherit' },
                         theme: { mode: 'dark' },
@@ -324,6 +329,7 @@ export default function AnalyticsPage() {
                       series={byCategory.map(c => Number(c.total || 0))}
                       type="donut"
                       height="100%"
+                      width="100%"
                     />
                   </div>
                 </div>
