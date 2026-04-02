@@ -203,7 +203,7 @@ export default function AnalyticsPage() {
                     colors: ['#22c55e', '#f43f5e', '#facc15'],
                     fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05, stops: [0, 100] } },
                     dataLabels: { enabled: false },
-                    stroke: { curve: 'smooth', width: [2, 2, 2], dashArray: [0, 0, 5] },
+                    stroke: { curve: 'straight', width: [2, 2, 2], dashArray: [0, 0, 5] },
                     xaxis: { categories: evolution.map(d => d.monthLabel), axisBorder: { show: false }, axisTicks: { show: false }, labels: { style: { colors: '#94a3b8' } } },
                     yaxis: { labels: { formatter: (val) => formatCurrency(val, true), style: { colors: '#94a3b8' } } },
                     grid: { borderColor: '#334155', strokeDashArray: 4, xaxis: { lines: { show: true } }, yaxis: { lines: { show: true } } },

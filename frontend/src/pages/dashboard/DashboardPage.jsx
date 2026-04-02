@@ -89,7 +89,7 @@ export default function DashboardPage() {
     chart: { type: 'area', background: 'transparent', toolbar: { show: false }, zoom: { enabled: true, type: 'x' } },
     colors: ['#22c55e', '#f43f5e'],
     dataLabels: { enabled: false },
-    stroke: { curve: 'smooth', width: 2 },
+    stroke: { curve: 'straight', width: 2 },
     xaxis: { categories: evolutionData.map(m => m.monthLabel), labels: { style: { colors: '#94a3b8' } }, axisBorder: { show: false }, axisTicks: { show: false } },
     yaxis: { labels: { style: { colors: '#94a3b8' }, formatter: (v) => `${(v / 1000).toFixed(0)}k` } },
     grid: { borderColor: 'var(--border-color)', strokeDashArray: 3, xaxis: { lines: { show: true } }, yaxis: { lines: { show: true } } },
