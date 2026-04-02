@@ -28,21 +28,26 @@ router.get('/', async (req, res) => {
     }
 
     let txQuery = supabase.from('transactions').select('amount, type, date, is_internal_transfer, category_id, categories(name, icon, color)').eq('user_id', req.user.id).gte('date', startDate).lte('date', endDate);
+    let allTxsQuery = supabase.from('transactions').select('amount, type, is_internal_transfer, account_id').eq('user_id', req.user.id);
     let debtsQuery = supabase.from('debts').select('current_balance, status').eq('user_id', req.user.id);
     let recurringQuery = supabase.from('recurring_bills').select('*').eq('user_id', req.user.id).eq('status', 'active');
-    let accountsQuery = supabase.from('accounts').select('balance').eq('user_id', req.user.id);
+    let accountsQuery = supabase.from('accounts').select('id, balance').eq('user_id', req.user.id);
     
     // Apply workspace filter to base queries
     if (workspace === 'personal') {
       txQuery = txQuery.eq('account_type', 'personal').is('family_id', null);
+      allTxsQuery = allTxsQuery.eq('account_type', 'personal').is('family_id', null);
     } else if (workspace === 'business') {
       txQuery = txQuery.eq('account_type', 'business').is('family_id', null);
+      allTxsQuery = allTxsQuery.eq('account_type', 'business').is('family_id', null);
     } else if (workspace === 'family') {
       txQuery = txQuery.not('family_id', 'is', null);
+      allTxsQuery = allTxsQuery.not('family_id', 'is', null);
     }
 
-    const [txResult, recurringResult, debtsResult, goalsResult, reserveResult, healthResult, accountsResult] = await Promise.all([
+    const [txResult, allTxsResult, recurringResult, debtsResult, goalsResult, reserveResult, healthResult, accountsResult] = await Promise.all([
       txQuery,
+      allTxsQuery,
       recurringQuery,
       debtsQuery,
       supabase.from('goals').select('target_amount, current_amount, status').eq('user_id', req.user.id),
@@ -52,7 +57,15 @@ router.get('/', async (req, res) => {
     ]);
 
     const accountsData = accountsResult.data || [];
-    const trueBalance = accountsData.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
+    let trueBalance = accountsData.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
+    
+    // Apply historical transaction summation to trueBalance
+    const allTxs = allTxsResult.data || [];
+    allTxs.forEach(t => {
+      if (t.is_internal_transfer || t.type === 'transfer') return;
+      if (t.type === 'income') trueBalance += parseFloat(t.amount || 0);
+      else if (t.type === 'expense') trueBalance -= Math.abs(parseFloat(t.amount || 0));
+    });
 
     const txData = txResult.data || [];
     const nonTransfer = txData.filter(t => !t.is_internal_transfer && t.type !== 'transfer');

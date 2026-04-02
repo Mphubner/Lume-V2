@@ -341,7 +341,7 @@ export default function DashboardPage() {
                   chart: { type: 'area', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
                   theme: { mode: 'dark' },
                   colors: ['#3b82f6', '#f43f5e', '#22c55e'],
-                  stroke: { curve: 'stepline', width: [3, 0, 0] },
+                  stroke: { curve: ['stepline', 'straight', 'straight'], width: [3, 0, 0] },
                   fill: { type: ['gradient', 'solid', 'solid'], gradient: { shadeIntensity: 1, opacityFrom: 0.25, opacityTo: 0.02, stops: [0, 90, 100] } },
                   dataLabels: { enabled: false },
                   markers: { size: [0, 4, 4], colors: ['#3b82f6', '#f43f5e', '#22c55e'], hover: { size: 6 } },
