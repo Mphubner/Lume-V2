@@ -204,6 +204,10 @@ select {
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
 .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
 
+.grid > *, .grid-2 > *, .grid-3 > *, .grid-4 > * {
+  min-width: 0;
+}
+
 /* ---- Layout ---- */
 .app-layout {
   display: flex;
@@ -864,6 +868,17 @@ select {
   display: flex;
   flex-direction: column;
   animation: slideUp 0.3s ease;
+}
+.stat-card {
+  padding: 1.5rem;
+  border-radius: var(--border-radius-lg);
+  border: 1px solid transparent;
+  color: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  min-width: 0; /* IMPEDIR APEXCHARTS FLEXBLOWOUT */
 }
 .chatbot-header {
   display: flex;
