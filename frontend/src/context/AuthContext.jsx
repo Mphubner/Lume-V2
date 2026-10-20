@@ -1,169 +1,94 @@
-import { createContext, useContext, useState, useEffect } from 'react';
-import { supabase, isDemoMode } from '../services/supabase';
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { supabase } from '../services/supabase';
+import { queryClient } from '../services/queryClient';
 import api from '../services/api';
 
 const AuthContext = createContext(null);
-
-const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || '';
-
-const DEMO_USER = {
-  id: 'demo-user',
-  email: 'demo@lume.com',
-  user_metadata: { full_name: 'Marcos Pereira' },
-};
-
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (isDemoMode) {
-      setUser(DEMO_USER);
-      setProfile({
-        full_name: 'Marcos Pereira',
-        email: 'demo@lume.com',
-        role: 'admin',
-        plan: 'family',
-        plan_status: 'active',
-        onboarding_completed: true,
-      });
-      api.setToken('demo-token');
-      setLoading(false);
-      return;
-    }
-
-    // Get current session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        setUser(session.user);
-        api.setToken(session.access_token);
-        loadProfile();
-      }
-      setLoading(false);
-    });
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'PASSWORD_RECOVERY') {
-        // User clicked the reset password link — let ResetPasswordPage handle it
-        if (session) {
-          setUser(session.user);
-          api.setToken(session.access_token);
-        }
-        return;
-      }
-
-      if (session) {
-        setUser(session.user);
-        api.setToken(session.access_token);
-        loadProfile();
-      } else {
-        setUser(null);
-        setProfile(null);
-        api.setToken(null);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const loadProfile = async () => {
+  const [loading, setLoading] = useState(!!supabase);
+  const [authError, setAuthError] = useState(() => supabase ? null : new Error('Autenticação não configurada neste ambiente.'));
+  const activeId = useRef(null);
+  const loadProfile = useCallback(async () => {
+    const id = activeId.current;
+    const requestSession = api.sessionId;
     try {
       const data = await api.getProfile();
-      setProfile(data);
-    } catch (err) {
-      // Profile may not exist yet (first login before onboarding)
-      console.warn('Profile not loaded:', err.message);
-    }
-  };
-
-  // --- Auth Methods ---
-
-  // OAuth (Google, etc.)
-  const signIn = async (provider = 'google') => {
-    if (isDemoMode) return;
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: `${window.location.origin}/dashboard`,
-        scopes: provider === 'google' ? 'https://www.googleapis.com/auth/calendar.events' : undefined,
-      },
+      if (id === activeId.current && requestSession === api.sessionId) { setProfile(data); setAuthError(null); }
+    } catch (error) { if (id === activeId.current && requestSession === api.sessionId) setAuthError(error); }
+  }, []);
+  useEffect(() => {
+    if (!supabase) return;
+    let mounted = true;
+    let authRevision = 0;
+    const applySession = async (session) => {
+      if (!mounted) return;
+      const nextId = session?.user.id || null;
+      if (nextId !== activeId.current) {
+        activeId.current = nextId;
+        api.sessionId = nextId ? `${nextId}:${crypto.randomUUID()}` : null;
+        api.workspace = 'all';
+        queryClient.clear();
+        setProfile(null);
+      }
+      api.setToken(session?.access_token || null);
+      setUser(session?.user || null);
+      setLoading(!!session);
+      if (session) await loadProfile();
+      if (mounted && activeId.current === nextId) setLoading(false);
+    };
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted || authRevision !== 0) return;
+      if (error) { setAuthError(error); setLoading(false); }
+      else applySession(data.session);
     });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => { authRevision += 1; void applySession(session); });
+    return () => { mounted = false; subscription.unsubscribe(); };
+  }, [loadProfile]);
+  const requireAuth = () => { if (!supabase) throw new Error('Autenticação não configurada.'); };
+  const signIn = async (provider = 'google') => {
+    requireAuth();
+    const { error } = await supabase.auth.signInWithOAuth({ provider, options: { redirectTo: `${window.location.origin}/dashboard` } });
     if (error) throw error;
   };
-
-  // Email + Password login
   const signInWithEmail = async (email, password) => {
-    if (isDemoMode) return;
+    requireAuth();
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
     return data;
   };
-
-  // Email signup
   const signUp = async (email, password, fullName) => {
-    if (isDemoMode) return;
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { full_name: fullName },
-        emailRedirectTo: `${window.location.origin}/login`,
-      },
-    });
+    requireAuth();
+    const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName }, emailRedirectTo: `${window.location.origin}/login` } });
     if (error) throw error;
     return data;
   };
-
-  // Reset password (send email)
   const resetPassword = async (email) => {
-    if (isDemoMode) return;
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/resetar-senha`,
-    });
+    requireAuth();
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/resetar-senha` });
     if (error) throw error;
   };
-
-  // Update password (after reset)
-  const updatePassword = async (newPassword) => {
-    if (isDemoMode) return;
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
+  const updatePassword = async (password) => {
+    requireAuth();
+    const { error } = await supabase.auth.updateUser({ password });
     if (error) throw error;
   };
-
-  // Sign out
   const signOut = async () => {
-    if (isDemoMode) return;
-    await supabase.auth.signOut();
-    setUser(null);
-    setProfile(null);
+    activeId.current = null;
+    api.sessionId = null;
+    api.setToken(null);
+    api.workspace = 'all';
+    queryClient.clear();
+    setUser(null); setProfile(null);
+    if (supabase) { const { error } = await supabase.auth.signOut(); if (error) throw error; }
   };
-
-  const isAdmin = profile?.role === 'admin' || user?.email === ADMIN_EMAIL;
-
-  return (
-    <AuthContext.Provider value={{
-      user,
-      profile,
-      loading,
-      isAdmin,
-      isDemoMode,
-      signIn,
-      signInWithEmail,
-      signUp,
-      resetPassword,
-      updatePassword,
-      signOut,
-      refreshProfile: loadProfile,
-    }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={{ user, profile, loading, authError, isAdmin: profile?.role === 'admin', isDemoMode: false, signIn, signInWithEmail, signUp, resetPassword, updatePassword, signOut, refreshProfile: loadProfile }}>{children}</AuthContext.Provider>;
 }
-
-export const useAuth = () => {
+// The hook shares the provider module to keep the authentication contract together.
+// eslint-disable-next-line react-refresh/only-export-components
+export function useAuth() {
   const context = useContext(AuthContext);
   if (!context) throw new Error('useAuth must be used within AuthProvider');
   return context;
-};
+}

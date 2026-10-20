@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Sun, Lock, Eye, EyeOff, ArrowRight, CheckCircle } from 'lucide-react';
@@ -59,25 +59,25 @@ export default function ResetPasswordPage() {
             <h2>Redefinir senha</h2>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>Crie uma nova senha para sua conta.</p>
 
-            {error && <div className="auth-error">{error}</div>}
+            {error && <div className="auth-error" role="alert">{error}</div>}
 
             <form onSubmit={handleSubmit} className="auth-form">
               <div className="auth-field">
                 <Lock size={18} className="auth-field-icon" />
-                <input type={showPassword ? 'text' : 'password'} placeholder="Nova senha (min. 6 chars)" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" />
-                <button type="button" className="auth-field-toggle" onClick={() => setShowPassword(!showPassword)}>
+                <input type={showPassword ? 'text' : 'password'} aria-label="Nova senha (min. 6 chars)" placeholder="Nova senha (min. 6 chars)" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" />
+                <button type="button" aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"} className="auth-field-toggle" onClick={() => setShowPassword(!showPassword)}>
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
               <div className="auth-field">
                 <Lock size={18} className="auth-field-icon" />
-                <input type="password" placeholder="Confirme a nova senha" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password" />
+                <input type="password" aria-label="Confirme a nova senha" placeholder="Confirme a nova senha" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password" />
               </div>
 
               {password && (
                 <div className="auth-password-strength">
                   <div className={`strength-bar ${password.length >= 8 ? 'strong' : password.length >= 6 ? 'medium' : 'weak'}`} />
-                  <span>{password.length >= 8 ? '✅ Senha forte' : password.length >= 6 ? '⚠️ Senha ok' : '❌ Muito curta'}</span>
+                  <span>{password.length >= 8 ? '8 ou mais caracteres' : password.length >= 6 ? '6 ou mais caracteres' : '❌ Muito curta'}</span>
                 </div>
               )}
 

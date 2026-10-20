@@ -1,8 +1,9 @@
+import DataError from '../ui/DataError';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 
 export default function ProtectedRoute({ children, requireAdmin = false }) {
-  const { user, profile, loading, isAdmin, isDemoMode } = useAuth();
+  const { user, profile, loading, isAdmin, isDemoMode, authError, refreshProfile } = useAuth();
   const location = useLocation();
 
   // Still loading auth state
@@ -13,6 +14,8 @@ export default function ProtectedRoute({ children, requireAdmin = false }) {
       </div>
     );
   }
+
+  if (authError && user) return <DataError error={authError} onRetry={refreshProfile} />;
 
   // Demo mode — allow everything
   if (isDemoMode) return children;

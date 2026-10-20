@@ -1,254 +1,33 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../../services/api';
-import { Upload as UploadIcon, FileText, CheckCircle, AlertTriangle, Building2, Loader2, RefreshCw } from 'lucide-react';
-import PluggyWidget from '../../components/ui/PluggyWidget';
 import ImportAuditModal from './ImportAuditModal';
-
+import DataError from '../../components/ui/DataError';
+const LABELS = { queued: 'Na fila', processing: 'Extraindo linhas', needs_review: 'Revisão necessária', completed: 'Aplicado', failed: 'Falhou', cancelled: 'Cancelado', reversed: 'Revertido' };
 export default function ImportPage() {
-  const [accountType, setAccountType] = useState('checking');
-  const [accountName, setAccountName] = useState('');
-  const [file, setFile] = useState(null);
-  const [dragOver, setDragOver] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  
-  const [history, setHistory] = useState([]);
-  const [isPolling, setIsPolling] = useState(false);
-  const [auditImportId, setAuditImportId] = useState(null);
-  const [accounts, setAccounts] = useState([]);
-  const [family, setFamily] = useState([]);
-  const [accountId, setAccountId] = useState('');
-  const [memberId, setMemberId] = useState('');
-
-  const fetchHistory = async () => {
+  const [accounts, setAccounts] = useState([]); const [history, setHistory] = useState([]); const [accountId, setAccountId] = useState(''); const [file, setFile] = useState(null); const [selected, setSelected] = useState(null); const [busy, setBusy] = useState(false); const [error, setError] = useState(null);
+  const [options, setOptions] = useState({ locale: 'pt-BR', delimiter: '', date: '', description: '', amount: '' });
+  const load = useCallback(async () => { try { const [list, jobs] = await Promise.all([api.getAccounts(), api.getImportHistory()]); setAccounts(list); setHistory(jobs); setError(null); } catch (e) { setError(e); } }, []);
+  useEffect(() => { void load(); }, [load]);
+  const processing = history.some(job => ['queued', 'processing'].includes(job.status));
+  useEffect(() => { if (!processing) return; const timer = setInterval(load, 4000); return () => clearInterval(timer); }, [processing, load]);
+  const upload = async event => {
+    event.preventDefault(); if (!file || !accountId) return; setBusy(true); setError(null);
     try {
-      const res = await api.getImportHistory();
-      setHistory(res);
-      const hasProcessing = res.some(h => h.status === 'processing');
-      setIsPolling(hasProcessing);
-    } catch (e) {
-      console.error(e);
-    }
+      if (file.size > 5 * 1024 * 1024) throw new Error('O limite por arquivo é 5 MB.');
+      const parserOptions = { locale: options.locale, ...(options.delimiter ? { delimiter: options.delimiter } : {}), columns: Object.fromEntries(['date', 'description', 'amount'].filter(key => options[key]).map(key => [key, options[key]])) };
+      await api.uploadFile(file, accountId, null, parserOptions); setFile(null); await load();
+    } catch (e) { setError(e); } finally { setBusy(false); }
   };
-
-  const fetchDropdowns = async () => {
-    try {
-      const [accs, fam] = await Promise.all([ api.getAccounts(), api.getFamily() ]);
-      setAccounts(Array.isArray(accs) ? accs : []);
-      setFamily(Array.isArray(fam) ? fam : fam?.members || []);
-    } catch (e) { console.error(e); }
-  };
-
-  useEffect(() => {
-    fetchHistory();
-    fetchDropdowns();
-  }, []);
-
-  useEffect(() => {
-    let interval;
-    if (isPolling) {
-      interval = setInterval(fetchHistory, 4000);
-    }
-    return () => clearInterval(interval);
-  }, [isPolling]);
-
-  const handleDrop = useCallback((e) => {
-    e.preventDefault();
-    setDragOver(false);
-    const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile) setFile(droppedFile);
-  }, []);
-
-  const handleUpload = async () => {
-    if (!file) return;
-    setUploading(true);
-    try {
-      let finalAccountId = accountId;
-      
-      // Criar nova conta dinamicamente se escolheu a opção
-      if (accountId === 'new' && accountName.trim()) {
-        const newAcc = await api.createAccount({
-          name: accountName.trim(),
-          type: 'checking',
-          institution: 'Banco Padrão',
-          balance: 0
-        });
-        finalAccountId = newAcc.id;
-        setAccountId(newAcc.id);
-        fetchDropdowns(); // Recarrega as contas
-      }
-      
-      await api.uploadFile(file, finalAccountId || null, memberId || null);
-      setFile(null); // Limpa o estado e libera a UI
-      fetchHistory(); // Chama o history para ver o novo estado processing
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case 'processing': return <span className="badge" style={{background: 'var(--accent-warning)', color: '#000', display: 'flex', gap: '4px', alignItems: 'center'}}><Loader2 size={12} className="animate-spin" /> Processando IA</span>;
-      case 'completed': return <span className="badge" style={{background: 'var(--color-success)', color: '#fff', display: 'flex', gap: '4px', alignItems: 'center'}}><CheckCircle size={12} /> Concluído</span>;
-      case 'failed': return <span className="badge" style={{background: 'var(--color-danger)', color: '#fff', display: 'flex', gap: '4px', alignItems: 'center'}}><AlertTriangle size={12} /> Falhou</span>;
-      case 'empty': return <span className="badge" style={{background: 'var(--bg-card-hover)', color: 'var(--text-muted)'}}>Vazio</span>;
-      default: return <span className="badge text-muted">{status}</span>;
-    }
-  };
-
-  return (
-    <div>
-      {auditImportId && <ImportAuditModal importId={auditImportId} onClose={() => setAuditImportId(null)} />}
-      <div className="page-header">
-        <h1>Importação e Conexões</h1>
-        <p>Conecte seus bancos ou faça upload inteligente de faturas com a IA Lume</p>
-      </div>
-
-      <div style={{ marginBottom: '2rem' }}>
-        <PluggyWidget onConnectSuccess={(data) => fetchHistory()} />
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', margin: '2rem 0' }}>
-        <div style={{ flex: 1, height: 1, background: 'var(--border-color)' }}></div>
-        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Ou Exporte Manualmente (IA)</div>
-        <div style={{ flex: 1, height: 1, background: 'var(--border-color)' }}></div>
-      </div>
-
-      <div className="grid grid-2" style={{ alignItems: 'start', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' }}>
-        
-        {/* Lado Esquerdo: Upload */}
-        <div>
-          <div className="card" style={{ marginBottom: '1.5rem', background: 'var(--bg-card)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-              <div style={{ width: 36, height: 36, borderRadius: 8, background: 'var(--accent-purple-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                ✨
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>Upload Inteligente</div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>A IA analisa e categoriza automaticamente</div>
-              </div>
-            </div>
-
-            <div className="grid grid-2" style={{ marginBottom: '1.5rem', gap: '1rem', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Atribuir a Conta</label>
-                <select value={accountId} onChange={e => setAccountId(e.target.value)} style={{ width: '100%', marginBottom: accountId === 'new' ? '0.5rem' : 0 }}>
-                  <option value="">Automático / Desconhecida</option>
-                  <optgroup label="Minhas Contas">
-                    {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.institution})</option>)}
-                  </optgroup>
-                  <option value="new">+ Cadastrar Nova Conta Agora</option>
-                </select>
-                {accountId === 'new' && (
-                  <input type="text" placeholder="Nome rápido para a conta..." value={accountName} onChange={e => setAccountName(e.target.value)} style={{ width: '100%' }} autoFocus />
-                )}
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Atribuir a Membro</label>
-                <select value={memberId} onChange={e => setMemberId(e.target.value)} style={{ width: '100%' }}>
-                  <option value="">Nenhum (Transação Pessoal)</option>
-                  {family.map(mem => <option key={mem.id} value={mem.id}>{mem.name} — {mem.role}</option>)}
-                </select>
-              </div>
-            </div>
-
-            <div
-              className={`upload-zone ${dragOver ? 'dragover' : ''}`}
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={handleDrop}
-              onClick={() => document.getElementById('file-input').click()}
-              style={{ padding: '2rem', border: '2px dashed var(--border-color)', borderRadius: '12px', textAlign: 'center', cursor: 'pointer', background: dragOver ? 'var(--bg-card-hover)' : 'transparent', transition: 'all 0.2s' }}
-            >
-              <input id="file-input" type="file" accept=".pdf,.csv,.xlsx,.ofx" style={{ display: 'none' }} onChange={e => setFile(e.target.files[0])} />
-              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📤</div>
-              {file ? (
-                <>
-                  <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.25rem' }}>{file.name}</div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{(file.size / 1024).toFixed(1)} KB</div>
-                </>
-              ) : (
-                <>
-                  <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.25rem' }}>Arraste seus extratos aqui</div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>ou clique para selecionar</div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.5rem' }}>Suporta PDF, CSV, OFX</div>
-                </>
-              )}
-            </div>
-
-            {file && (
-              <div style={{ marginTop: '1rem' }}>
-                <button 
-                  className="btn btn-primary" 
-                  onClick={handleUpload} 
-                  disabled={uploading} 
-                  style={{ width: '100%', padding: '0.75rem', fontSize: '1rem', borderRadius: '8px' }}
-                >
-                  {uploading ? '⏳ Enviando para Fila...' : 'Iniciar Importação Automática'}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Lado Direito: Histórico da Fila */}
-        <div className="card" style={{ background: 'var(--bg-card)', minHeight: '344px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ fontWeight: 600, fontSize: '1.1rem' }}>Histórico Lume AI</div>
-            {isPolling && <RefreshCw size={16} className="text-muted animate-spin" />}
-          </div>
-
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-            Acompanhe a extração de seus últimos extratos enviados.
-          </div>
-
-          {history.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text-muted)', border: '1px dashed var(--border-color)', borderRadius: '12px' }}>
-              <FileText size={32} style={{ opacity: 0.5, marginBottom: '0.5rem' }} />
-              <div>Nenhuma importação no histórico ainda.</div>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '400px', overflowY: 'auto', paddingRight: '0.5rem' }}>
-              {history.map(item => (
-                <div key={item.id} style={{ 
-                  border: '1px solid',
-                  borderColor: item.status === 'processing' ? 'var(--accent-gold)' : 'var(--border-color)', 
-                  borderRadius: '12px', 
-                  padding: '1rem',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  background: item.status === 'processing' ? 'var(--accent-gold-dim)' : 'transparent',
-                  transition: 'all 0.3s ease'
-                }}>
-                  <div style={{ flex: 1, minWidth: 0, paddingRight: '1rem' }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.95rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {item.filename}
-                    </div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                      {new Date(item.created_at).toLocaleString('pt-BR')} 
-                      {item.total_transactions > 0 && ` • ${item.total_transactions} lançamentos`}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.5rem' }}>
-                    {getStatusBadge(item.status)}
-                    {item.status === 'completed' && item.total_transactions > 0 && (
-                      <button 
-                        className="btn btn-outline" 
-                        style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px' }}
-                        onClick={() => setAuditImportId(item.id)}
-                      >
-                         Ver Extração Lume
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+  const jobAction = async (id, action) => { setBusy(true); try { await api.request(`/import/${id}/${action}`, { method: 'POST', body: {} }); await load(); } catch (e) { setError(e); } finally { setBusy(false); } };
+  const openSource = async id => { try { const result = await api.request(`/import/${id}/source`); const url = new URL(result.url); if (url.protocol !== 'https:') throw new Error('Endereço de arquivo inválido.'); window.open(url.toString(), '_blank', 'noopener,noreferrer'); } catch (e) { setError(e); } };
+  return <div><div className="page-header"><h1>Importar e conferir extratos</h1><p>O upload prepara um lote. Seus saldos só mudam após conferir as linhas e aplicar o fechamento.</p></div>{error && <DataError error={error} onRetry={load} />}
+    <form onSubmit={upload} className="card"><label>Conta de destino<select required value={accountId} onChange={e => setAccountId(e.target.value)}><option value="">Selecione a conta e o titular</option>{accounts.map(account => <option key={account.id} value={account.id}>{account.name} · {account.type} · base {account.balance_date || 'não informada'}</option>)}</select></label><p><Link to="/configuracoes">Cadastre uma conta com saldo e data-base</Link> antes de importar. Não use uma conta corrente para a fatura de um cartão.</p>
+      <label>Arquivo original (até 5 MB)<input type="file" required accept=".csv,.ofx,.pdf" onChange={e => setFile(e.target.files[0] || null)} /></label><p>CSV ou OFX são preferenciais. PDF precisa conter texto e linhas completas; páginas digitalizadas ou ambíguas podem ser recusadas. Exporte XLSX como CSV.</p>
+      <details><summary>Formato e colunas do CSV</summary><label>Formato numérico<select value={options.locale} onChange={e => setOptions({ ...options, locale: e.target.value })}><option value="pt-BR">Brasileiro: 1.234,56</option><option value="en-US">Internacional: 1,234.56</option></select></label><label>Separador<select value={options.delimiter} onChange={e => setOptions({ ...options, delimiter: e.target.value })}><option value="">Detectar</option><option value=";">Ponto e vírgula</option><option value=",">Vírgula</option><option value={'\t'}>Tabulação</option></select></label>{[['date', 'Cabeçalho da data'], ['description', 'Cabeçalho da descrição'], ['amount', 'Cabeçalho do valor com sinal']].map(([key, label]) => <label key={key}>{label}<input value={options[key]} onChange={e => setOptions({ ...options, [key]: e.target.value })} placeholder="Deixe vazio para detectar" /></label>)}</details>
+      <button className="btn btn-primary" disabled={busy || !file || !accountId}>{busy ? 'Enviando…' : 'Enviar para revisão'}</button>
+    </form><div className="card"><h2>Integração bancária</h2><p>Conexão automática ainda em validação. Use extratos e conciliação por enquanto.</p></div>
+    <h2>Lotes importados</h2><button onClick={load} className="btn btn-secondary">Atualizar histórico</button><div className="table-responsive"><table className="data-table"><thead><tr><th>Arquivo / conta</th><th>Estado</th><th>Linhas</th><th>Ações</th></tr></thead><tbody>{history.map(job => <tr key={job.id}><td>{job.filename}<small style={{ display: 'block' }}>{job.accounts?.name}</small></td><td>{LABELS[job.status] || job.status}{job.error_message && <p role="alert">{job.error_message}</p>}</td><td>{job.total_transactions ?? '—'}</td><td>{job.status === 'needs_review' && <button className="btn btn-primary" onClick={() => setSelected(job.id)}>Conferir lote</button>} <button className="btn btn-secondary" onClick={() => openSource(job.id)}>Arquivo original</button>{['failed', 'cancelled'].includes(job.status) && <button disabled={busy} onClick={() => jobAction(job.id, 'retry')}>Tentar novamente</button>}{['queued', 'needs_review'].includes(job.status) && <button disabled={busy} onClick={() => { if (confirm('Cancelar este lote sem aplicar ao saldo?')) jobAction(job.id, 'cancel'); }}>Cancelar lote</button>}</td></tr>)}</tbody></table></div>
+    {selected && <ImportAuditModal importId={selected} onClose={() => { setSelected(null); void load(); }} />}
+  </div>;
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Sun, Mail, Lock, Eye, EyeOff, User, ArrowRight } from 'lucide-react';
 
@@ -14,7 +14,6 @@ const GoogleIcon = () => (
 
 export default function RegisterPage() {
   const { signUp, signIn } = useAuth();
-  const navigate = useNavigate();
   const [form, setForm] = useState({ fullName: '', email: '', password: '', confirmPassword: '' });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -33,10 +32,10 @@ export default function RegisterPage() {
 
   const handleGoogleSignup = () => {
     setLoading(true);
-    signIn('google').catch((err) => { 
+    signIn('google').catch((err) => {
       console.error(err);
-      setError(`Erro ao cadastrar com Google: ${err.message || 'Bloqueado pelo navegador'}`); 
-      setLoading(false); 
+      setError(`Erro ao cadastrar com Google: ${err.message || 'Bloqueado pelo navegador'}`);
+      setLoading(false);
     });
   };
 
@@ -94,7 +93,7 @@ export default function RegisterPage() {
               <p>Comece a organizar suas finanças hoje</p>
             </div>
 
-            {error && <div className="auth-error">{error}</div>}
+            {error && <div className="auth-error" role="alert">{error}</div>}
 
             <button className="auth-google-btn" onClick={handleGoogleSignup} disabled={loading}>
               <GoogleIcon />
@@ -106,28 +105,28 @@ export default function RegisterPage() {
             <form onSubmit={handleSubmit} className="auth-form">
               <div className="auth-field">
                 <User size={18} className="auth-field-icon" />
-                <input type="text" placeholder="Nome completo" value={form.fullName} onChange={e => set('fullName', e.target.value)} autoComplete="name" />
+                <input type="text" aria-label="Nome completo" placeholder="Nome completo" value={form.fullName} onChange={e => set('fullName', e.target.value)} autoComplete="name" />
               </div>
               <div className="auth-field">
                 <Mail size={18} className="auth-field-icon" />
-                <input type="email" placeholder="seu@email.com" value={form.email} onChange={e => set('email', e.target.value)} autoComplete="email" />
+                <input type="email" aria-label="seu@email.com" placeholder="seu@email.com" value={form.email} onChange={e => set('email', e.target.value)} autoComplete="email" />
               </div>
               <div className="auth-field">
                 <Lock size={18} className="auth-field-icon" />
-                <input type={showPassword ? 'text' : 'password'} placeholder="Crie uma senha (min. 6 chars)" value={form.password} onChange={e => set('password', e.target.value)} autoComplete="new-password" />
-                <button type="button" className="auth-field-toggle" onClick={() => setShowPassword(!showPassword)}>
+                <input type={showPassword ? 'text' : 'password'} aria-label="Crie uma senha (min. 6 chars)" placeholder="Crie uma senha (min. 6 chars)" value={form.password} onChange={e => set('password', e.target.value)} autoComplete="new-password" />
+                <button type="button" aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"} className="auth-field-toggle" onClick={() => setShowPassword(!showPassword)}>
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
               <div className="auth-field">
                 <Lock size={18} className="auth-field-icon" />
-                <input type="password" placeholder="Confirme a senha" value={form.confirmPassword} onChange={e => set('confirmPassword', e.target.value)} autoComplete="new-password" />
+                <input type="password" aria-label="Confirme a senha" placeholder="Confirme a senha" value={form.confirmPassword} onChange={e => set('confirmPassword', e.target.value)} autoComplete="new-password" />
               </div>
 
               {form.password && (
                 <div className="auth-password-strength">
                   <div className={`strength-bar ${form.password.length >= 8 ? 'strong' : form.password.length >= 6 ? 'medium' : 'weak'}`} />
-                  <span>{form.password.length >= 8 ? '✅ Senha forte' : form.password.length >= 6 ? '⚠️ Senha ok' : '❌ Muito curta'}</span>
+                  <span>{form.password.length >= 8 ? '8 ou mais caracteres' : form.password.length >= 6 ? '6 ou mais caracteres' : '❌ Muito curta'}</span>
                 </div>
               )}
 

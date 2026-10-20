@@ -1,22 +1,26 @@
-import { useState, useEffect } from 'react';
+import DataError from '../../components/ui/DataError';
+import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import StatCard from '../../components/ui/StatCard';
 import { formatCurrency } from '../../utils/format';
 import { Gift, Search, Edit3, Save, RefreshCw, Eye, Trash2, Plus, X } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
-const PLAN_OPTIONS = ['free', 'individual', 'family', 'business'];
 
 export default function AdminPage() {
+  const [states, setStates] = useState({});
+  const track = useCallback(async (key, task, setter) => {
+    setStates(previous => ({ ...previous, [key]: { loading: true } }));
+    try { setter(await task()); setStates(previous => ({ ...previous, [key]: { loaded: true } })); }
+    catch (error) { setStates(previous => ({ ...previous, [key]: { error } })); }
+  }, []);
   const [activeTab, setActiveTab] = useState('kpis');
-  const [kpis, setKpis] = useState({ mrr: 40, arr: 479, payingUsers: 1, trialUsers: 2, freeUsers: 4, newUsersWeek: 0, churnRate: 0, conversionRate: 8.3 });
+  const [kpis, setKpis] = useState({});
   const [users, setUsers] = useState([]);
   const [search, setSearch] = useState('');
   const [settings, setSettings] = useState({});
-  const [editingSettings, setEditingSettings] = useState(false);
-  const [settingsForm, setSettingsForm] = useState({});
   const [grantModal, setGrantModal] = useState(false);
-  const [grantForm, setGrantForm] = useState({ email: '', plan: 'individual' });
+  const [grantForm, setGrantForm] = useState({ email: '', plan: '' });
   const [traffic, setTraffic] = useState([]);
   const [plans, setPlans] = useState([]);
   const [showPlanModal, setShowPlanModal] = useState(false);
@@ -24,51 +28,29 @@ export default function AdminPage() {
   const [viewingUser, setViewingUser] = useState(null);
   const [loadingUser, setLoadingUser] = useState(false);
 
+  const loadUsers = useCallback(async () => {
+    await track('subscriptions', () => api.getUsers(search), setUsers);
+ }, [search, track]);
+
+  const loadKPIs = useCallback(() => track('kpis', () => api.getKPIs(), setKpis), [track]);
+  const loadSettings = useCallback(() => track('settings', () => api.getSettings(), setSettings), [track]);
+  const loadTraffic = useCallback(() => track('traffic', () => api.getTraffic(), setTraffic), [track]);
+  const loadPlans = useCallback(() => track('plans', () => api.getPlans(), setPlans), [track]);
   useEffect(() => {
     if (activeTab === 'kpis') loadKPIs();
-    if (activeTab === 'subscriptions') loadUsers();
+    if (activeTab === 'subscriptions') { loadUsers(); loadPlans(); }
     if (activeTab === 'settings') loadSettings();
     if (activeTab === 'traffic') loadTraffic();
     if (activeTab === 'plans') loadPlans();
-  }, [activeTab]);
+  }, [activeTab, loadUsers, loadKPIs, loadSettings, loadTraffic, loadPlans]);
 
-  const loadKPIs = async () => { try { const d = await api.getKPIs(); setKpis(d); } catch {} };
-  const loadUsers = async () => {
-    try { const d = await api.getUsers(search); setUsers(d); } catch {
-      setUsers([
-        { id: 'u1', email: 'envisionmidiaofc@gmail.com', full_name: 'Envision Mídia', plan: 'individual', plan_status: 'trial', created_at: '2026-01-26', last_login: '2026-03-20' },
-        { id: 'u2', email: 'clientmarcaromas@gmail.com', full_name: 'Marc. Aromas', plan: 'individual', plan_status: 'active', created_at: '2026-01-13', last_login: '2026-03-27' },
-        { id: 'u3', email: 'mpereirah15@gmail.com', full_name: 'Marcos Pereira Hubner', plan: 'family', plan_status: 'granted', created_at: '2026-01-05', last_login: '2026-03-28' },
-        { id: 'u4', email: 'teste@teste.com', full_name: 'Usuário Teste', plan: null, plan_status: 'inactive', created_at: '2026-02-10', last_login: '2026-02-12' },
-        { id: 'u5', email: 'maria@email.com', full_name: 'Maria Silva', plan: 'individual', plan_status: 'trial', created_at: '2026-03-01', last_login: '2026-03-15' },
-      ]);
-    }
-  };
-  const loadSettings = async () => {
-    try { const d = await api.getSettings(); setSettings(d); setSettingsForm(d); } catch {
-      const s = { payment_gateway: 'stripe', stripe_secret_key: '', pagarme_secret_key: '', free_trial_days: 14, default_plan: 'free', ai_provider: 'groq', ai_api_key: '', ai_model: 'llama-3.3-70b-versatile', whatsapp_enabled: false, whatsapp_api_key: '' };
-      setSettings(s); setSettingsForm(s);
-    }
-  };
-  const loadTraffic = async () => {
-    try { const d = await api.getTraffic(); setTraffic(d); } catch {
-      setTraffic([
-        { date: 'seg', visits: 12, signups: 1 }, { date: 'ter', visits: 18, signups: 0 },
-        { date: 'qua', visits: 25, signups: 2 }, { date: 'qui', visits: 15, signups: 0 },
-        { date: 'sex', visits: 30, signups: 3 }, { date: 'sab', visits: 8, signups: 0 }, { date: 'dom', visits: 5, signups: 1 },
-      ]);
-    }
-  };
 
-  const saveSettings = async () => {
-    try { await api.updateSettings(settingsForm); setSettings(settingsForm); setEditingSettings(false); alert('Configurações salvas!'); } catch (err) { alert('Erro: ' + err.message); }
-  };
 
   const handleGrantAccess = async (e) => {
     e.preventDefault();
     const user = users.find(u => u.email === grantForm.email);
     if (!user) { alert('Usuário não encontrado'); return; }
-    try { await api.grantAccess(user.id, grantForm.plan); setGrantModal(false); setGrantForm({ email: '', plan: 'individual' }); loadUsers(); } catch (err) { alert('Erro: ' + err.message); }
+    try { await api.grantAccess(user.id, grantForm.plan); setGrantModal(false); setGrantForm({ email: '', plan: '' }); loadUsers(); } catch (err) { alert('Erro: ' + err.message); }
   };
 
   const statusBadge = (status) => {
@@ -77,21 +59,21 @@ export default function AdminPage() {
     return <span className={`badge ${map[status] || 'badge-info'}`}>{labels[status] || status}</span>;
   };
 
-  const loadPlans = async () => { try { const d = await api.getPlans(); setPlans(d); } catch (e) { console.error(e); } };
 
   const handleSavePlan = async (e) => {
     e.preventDefault();
     try {
-      const payload = { ...planForm, features: typeof planForm.features === 'string' ? planForm.features.split('\n').filter(Boolean) : planForm.features };
-      if (planForm.id) await api.updatePlan(planForm.id, payload);
-      else await api.createPlan(payload);
+      const { id } = planForm;
+      const payload = { name: planForm.name, is_active: planForm.is_active, stripe_price_id: planForm.stripe_price_id || null, price: Number(planForm.price), max_accounts: Number(planForm.max_accounts), max_transactions: Number(planForm.max_transactions), max_members: Number(planForm.max_members || 1), features: typeof planForm.features === 'string' ? planForm.features.split('\n').filter(Boolean) : planForm.features };
+      if (id) await api.updatePlan(id, payload);
+      else await api.createPlan({ ...payload, id: planForm.new_id });
       setShowPlanModal(false);
       loadPlans();
     } catch (err) { alert('Erro: ' + err.message); }
   };
 
   const handleDeletePlan = async (id) => {
-    if (!confirm('Excluir este plano definitivamente?')) return;
+    if (!confirm('Arquivar este plano e retirar do catálogo público?')) return;
     try { await api.deletePlan(id); loadPlans(); } catch (err) { alert('Erro: ' + err.message); }
   };
 
@@ -121,11 +103,14 @@ export default function AdminPage() {
         ))}
       </div>
 
+      {states[activeTab]?.error && <DataError error={states[activeTab].error} onRetry={() => ({ kpis: loadKPIs, subscriptions: loadUsers, settings: loadSettings, traffic: loadTraffic, plans: loadPlans })[activeTab]()} />}
+      {!states[activeTab]?.loaded && !states[activeTab]?.error && <p role="status">Consultando dados administrativos…</p>}
       {/* KPIs TAB */}
-      {activeTab === 'kpis' && (
+      {activeTab === 'kpis' && states[activeTab]?.loaded && (
         <div>
+          {kpis.mrrComplete === false && <p role="alert">Receita estimada incompleta: confira o catálogo das assinaturas.</p>}
           <div className="grid grid-4" style={{ marginBottom: '1.5rem' }}>
-            <StatCard label="💰 MRR" value={formatCurrency(kpis.mrr)} sub="Receita Recorrente Mensal" variant="income" />
+            <StatCard label="💰 MRR" value={formatCurrency(kpis.mrr)} sub="Estimativa pelo catálogo atual das assinaturas ativas" variant="income" />
             <StatCard label="📈 ARR" value={formatCurrency(kpis.arr)} sub="Receita Anual Projetada" variant="balance" />
             <StatCard label="👥 Assinantes Pagos" value={String(kpis.payingUsers)} variant="neutral" />
             <StatCard label="⏰ Em Trial" value={String(kpis.trialUsers)} variant="savings" />
@@ -133,13 +118,13 @@ export default function AdminPage() {
           <div className="grid grid-4" style={{ marginBottom: '1.5rem' }}>
             <StatCard label="🎁 Gratuitos" value={String(kpis.freeUsers)} variant="neutral" />
             <StatCard label="📊 Novos (7d)" value={String(kpis.newUsersWeek)} variant="income" />
-            <StatCard label="📉 Churn Rate" value={`${kpis.churnRate || 0}%`} variant="expense" />
-            <StatCard label="🔄 Conversão" value={`${kpis.conversionRate || 0}%`} sub="Trial → Pago" variant="savings" />
+            <StatCard label="📉 Churn Rate" value={kpis.churnRate == null ? 'Não calculado' : `${kpis.churnRate}%`} variant="expense" />
+            <StatCard label="🔄 Conversão" value={kpis.conversionRate == null ? 'Não calculado' : `${kpis.conversionRate}%`} sub="Assinantes pagos / usuários cadastrados" variant="savings" />
           </div>
           <div className="card">
             <div className="card-header"><h3 className="card-title">📊 Crescimento de Usuários (últimos 7 dias)</h3><button className="btn btn-secondary btn-sm" onClick={loadKPIs}><RefreshCw size={14} /> Atualizar</button></div>
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={[{ day: 'seg', users: 2 }, { day: 'ter', users: 0 }, { day: 'qua', users: 1 }, { day: 'qui', users: 0 }, { day: 'sex', users: 3 }, { day: 'sab', users: 0 }, { day: 'dom', users: 1 }]}>
+              <BarChart data={kpis.userGrowth || []}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                 <XAxis dataKey="day" stroke="var(--text-muted)" fontSize={12} />
                 <YAxis stroke="var(--text-muted)" fontSize={12} />
@@ -152,7 +137,7 @@ export default function AdminPage() {
       )}
 
       {/* SUBSCRIPTIONS TAB */}
-      {activeTab === 'subscriptions' && (
+      {activeTab === 'subscriptions' && states[activeTab]?.loaded && (
         <div className="card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <strong>{users.length} usuários</strong>
@@ -188,7 +173,7 @@ export default function AdminPage() {
                 <form onSubmit={handleGrantAccess}>
                   <div className="modal-body">
                     <div className="form-group"><label>Email do Usuário *</label><input value={grantForm.email} onChange={e => setGrantForm({ ...grantForm, email: e.target.value })} placeholder="usuario@email.com" required /></div>
-                    <div className="form-group"><label>Plano</label><select value={grantForm.plan} onChange={e => setGrantForm({ ...grantForm, plan: e.target.value })}>{PLAN_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
+                    <div className="form-group"><label>Plano</label><select value={grantForm.plan} onChange={e => setGrantForm({ ...grantForm, plan: e.target.value })}><option value="">Selecione um plano ativo</option>{plans.filter(p => p.is_active).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
                   </div>
                   <div className="modal-footer"><button type="button" className="btn btn-secondary" onClick={() => setGrantModal(false)}>Cancelar</button><button type="submit" className="btn btn-primary">🎁 Conceder</button></div>
                 </form>
@@ -199,7 +184,7 @@ export default function AdminPage() {
       )}
 
       {/* PLANS TAB */}
-      {activeTab === 'plans' && (
+      {activeTab === 'plans' && states[activeTab]?.loaded && (
         <div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
              <button className="btn btn-primary" onClick={() => {
@@ -237,83 +222,12 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* TRAFFIC TAB */}
-      {activeTab === 'traffic' && (
-        <div>
-          <div className="grid grid-3" style={{ marginBottom: '1.5rem' }}>
-            <StatCard label="Visitas (7d)" value={String(traffic.reduce((s, t) => s + (t.visits || 0), 0))} variant="neutral" />
-            <StatCard label="Cadastros (7d)" value={String(traffic.reduce((s, t) => s + (t.signups || 0), 0))} variant="income" />
-            <StatCard label="Taxa Conversão" value={`${traffic.length ? ((traffic.reduce((s, t) => s + (t.signups || 0), 0) / traffic.reduce((s, t) => s + (t.visits || 0), 0)) * 100).toFixed(1) : 0}%`} variant="savings" />
-          </div>
-          <div className="card">
-            <div className="card-header"><h3 className="card-title">📈 Tráfego dos Últimos 7 Dias</h3></div>
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={traffic}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                <XAxis dataKey="date" stroke="var(--text-muted)" fontSize={12} />
-                <YAxis stroke="var(--text-muted)" fontSize={12} />
-                <Tooltip contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 8, color: '#fff' }} />
-                <Line type="monotone" dataKey="visits" stroke="var(--accent-gold)" strokeWidth={2} name="Visitas" />
-                <Line type="monotone" dataKey="signups" stroke="var(--color-success)" strokeWidth={2} name="Cadastros" />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
+      {activeTab === 'traffic' && states[activeTab]?.loaded && <div>
+        <div className="grid grid-4"><StatCard label="Visitas registradas (7 dias)" value={String(traffic.last7Days?.views ?? 'Não confirmado')} /><StatCard label="Visitantes distintos registrados (7 dias)" value={String(traffic.last7Days?.unique ?? 'Não confirmado')} /><StatCard label="Visitas registradas (30 dias)" value={String(traffic.last30Days?.views ?? 'Não confirmado')} /><StatCard label="Visitantes distintos registrados (30 dias)" value={String(traffic.last30Days?.unique ?? 'Não confirmado')} /></div>
+        <div className="card"><h3>Páginas registradas nos últimos 30 dias</h3><p>Estes dados refletem apenas eventos recebidos; ausência de eventos não comprova ausência de visitas.</p><ul>{(traffic.topPages || []).map(page => <li key={page.page}>{page.page}: {page.count}</li>)}</ul><h3>Dispositivos registrados</h3><ul>{Object.entries(traffic.devices || {}).map(([device,count]) => <li key={device}>{device}: {count}</li>)}</ul></div>
+      </div>}
 
-      {/* SETTINGS TAB */}
-      {activeTab === 'settings' && (
-        <div>
-          <div className="card" style={{ marginBottom: '1.5rem' }}>
-            <div className="card-header"><h3 className="card-title">💳 Gateway de Pagamento</h3>{!editingSettings && <button className="btn btn-secondary btn-sm" onClick={() => setEditingSettings(true)}><Edit3 size={14} /> Editar</button>}</div>
-            <div className="form-row">
-              <div className="form-group">
-                <label>Gateway Principal</label>
-                <select value={settingsForm.payment_gateway} onChange={e => setSettingsForm({ ...settingsForm, payment_gateway: e.target.value })} disabled={!editingSettings}>
-                  <option value="stripe">Stripe</option><option value="pagarme">Pagar.me</option>
-                </select>
-              </div>
-            </div>
-            <div className="form-row">
-              <div className="form-group"><label>Stripe Secret Key</label><input type="password" value={settingsForm.stripe_secret_key || ''} onChange={e => setSettingsForm({ ...settingsForm, stripe_secret_key: e.target.value })} disabled={!editingSettings} placeholder="sk_live_..." /></div>
-              <div className="form-group"><label>Pagar.me Secret Key</label><input type="password" value={settingsForm.pagarme_secret_key || ''} onChange={e => setSettingsForm({ ...settingsForm, pagarme_secret_key: e.target.value })} disabled={!editingSettings} placeholder="ak_live_..." /></div>
-            </div>
-          </div>
-
-          <div className="card" style={{ marginBottom: '1.5rem' }}>
-            <div className="card-header"><h3 className="card-title">🤖 Configuração de IA</h3></div>
-            <div className="form-row">
-              <div className="form-group"><label>Provedor de IA</label><select value={settingsForm.ai_provider || ''} onChange={e => setSettingsForm({ ...settingsForm, ai_provider: e.target.value })} disabled={!editingSettings}><option value="groq">Groq (Llama 3)</option><option value="huggingface">HuggingFace</option><option value="together">Together.ai</option></select></div>
-              <div className="form-group"><label>Modelo</label><input value={settingsForm.ai_model || ''} onChange={e => setSettingsForm({ ...settingsForm, ai_model: e.target.value })} disabled={!editingSettings} /></div>
-            </div>
-            <div className="form-group"><label>API Key</label><input type="password" value={settingsForm.ai_api_key || ''} onChange={e => setSettingsForm({ ...settingsForm, ai_api_key: e.target.value })} disabled={!editingSettings} placeholder="gsk_..." /></div>
-          </div>
-
-          <div className="card" style={{ marginBottom: '1.5rem' }}>
-            <div className="card-header"><h3 className="card-title">⚙️ Configurações Gerais</h3></div>
-            <div className="form-row">
-              <div className="form-group"><label>Dias de Trial Grátis</label><input type="number" value={settingsForm.free_trial_days || 14} onChange={e => setSettingsForm({ ...settingsForm, free_trial_days: parseInt(e.target.value) })} disabled={!editingSettings} /></div>
-              <div className="form-group"><label>Plano Padrão</label><select value={settingsForm.default_plan || 'free'} onChange={e => setSettingsForm({ ...settingsForm, default_plan: e.target.value })} disabled={!editingSettings}><option value="free">Gratuito</option><option value="individual">Individual</option><option value="family">Família</option></select></div>
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <input type="checkbox" checked={settingsForm.whatsapp_enabled || false} onChange={e => setSettingsForm({ ...settingsForm, whatsapp_enabled: e.target.checked })} disabled={!editingSettings} />
-                  WhatsApp Integration
-                </label>
-              </div>
-              <div className="form-group"><label>WhatsApp API Key</label><input type="password" value={settingsForm.whatsapp_api_key || ''} onChange={e => setSettingsForm({ ...settingsForm, whatsapp_api_key: e.target.value })} disabled={!editingSettings || !settingsForm.whatsapp_enabled} /></div>
-            </div>
-          </div>
-
-          {editingSettings && (
-            <div style={{ display: 'flex', gap: '0.75rem' }}>
-              <button className="btn btn-primary" onClick={saveSettings}><Save size={16} /> Salvar Configurações</button>
-              <button className="btn btn-secondary" onClick={() => { setEditingSettings(false); setSettingsForm(settings); }}>Cancelar</button>
-            </div>
-          )}
-        </div>
-      )}
+      {activeTab === 'settings' && states[activeTab]?.loaded && <div className="card"><h2>Configuração do ambiente</h2><p>Segredos e habilitação de serviços são administrados nas variáveis do servidor. Esta tela informa somente o estado, sem receber ou revelar credenciais.</p><dl>{Object.entries(settings).map(([key,value]) => <div key={key}><dt>{key}</dt><dd>{typeof value === 'boolean' ? value ? 'Habilitado' : 'Desabilitado' : String(value)}</dd></div>)}</dl><button className="btn btn-secondary" onClick={loadSettings}>Atualizar estado</button></div>}
 
       {/* PLAN CRUD MODAL */}
       {showPlanModal && (
@@ -323,6 +237,8 @@ export default function AdminPage() {
             <form onSubmit={handleSavePlan}>
               <div className="modal-body">
                 <div className="form-row">
+                  {!planForm.id && <label>Identificador do plano<input required value={planForm.new_id || ''} onChange={e => setPlanForm({ ...planForm, new_id: e.target.value })} /></label>}
+                  <label>ID do preço no Stripe<input value={planForm.stripe_price_id || ''} onChange={e => setPlanForm({ ...planForm, stripe_price_id: e.target.value })} /></label>
                   <div className="form-group"><label>Nome do Plano</label><input value={planForm.name} onChange={e => setPlanForm({ ...planForm, name: e.target.value })} required /></div>
                   <div className="form-group"><label>Preço (R$)</label><input type="number" step="0.01" value={planForm.price} onChange={e => setPlanForm({ ...planForm, price: e.target.value })} required /></div>
                 </div>

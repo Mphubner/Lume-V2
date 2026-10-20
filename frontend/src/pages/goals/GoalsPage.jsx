@@ -1,7 +1,8 @@
+import DataError from '../../components/ui/DataError';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import StatCard from '../../components/ui/StatCard';
-import { formatCurrency, formatDate } from '../../utils/format';
+import { formatCurrency } from '../../utils/format';
 import { Target, Plus, Edit3, Trash2, X, ChevronDown, ChevronUp } from 'lucide-react';
 
 const GOAL_ICONS = ['🎯', '🏠', '🚗', '✈️', '📚', '💻', '🎓', '💍', '👶', '📱', '💰', '🏖️', '🏋️', '🎸'];
@@ -9,7 +10,8 @@ const GOAL_ICONS = ['🎯', '🏠', '🚗', '✈️', '📚', '💻', '🎓', '�
 export default function GoalsPage() {
   const [goals, setGoals] = useState([]);
   const [stats, setStats] = useState({ activeCount: 0, totalSaved: 0, totalTarget: 0, avgProgress: 0 });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [editingGoal, setEditingGoal] = useState(null);
   const [showContribute, setShowContribute] = useState(null);
@@ -21,16 +23,12 @@ export default function GoalsPage() {
   useEffect(() => { loadGoals(); }, []);
 
   const loadGoals = async () => {
-    setLoading(true);
+    setLoading(true); setError(null);
     try {
       const result = await api.getGoals();
       setGoals(result.goals || []);
-      setStats(result.stats || stats);
-    } catch {
-      // Sem dados demo — mostra empty state
-      setGoals([]);
-      setStats({ activeCount: 0, totalSaved: 0, totalTarget: 0, avgProgress: 0 });
-    } finally { setLoading(false); }
+      if (result.stats) setStats(result.stats);
+    } catch (err) { setError(err); } finally { setLoading(false); }
   };
 
   const openCreate = () => {
@@ -56,7 +54,7 @@ export default function GoalsPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const data = { ...form, target_amount: parseFloat(form.target_amount), current_amount: parseFloat(form.current_amount || 0) };
+      const data = { ...form, deadline: form.deadline || null, target_amount: parseFloat(form.target_amount), current_amount: parseFloat(form.current_amount || 0) };
       if (editingGoal) {
         await api.updateGoal(editingGoal.id, data);
       } else {
@@ -100,8 +98,10 @@ export default function GoalsPage() {
   const activeGoals = goals.filter(g => g.status === 'active');
   const completedGoals = goals.filter(g => g.status === 'completed');
 
+  if (error) return <DataError error={error} onRetry={loadGoals} />;
   return (
     <div>
+      <p className="card" role="note">Planejamento manual: valores declarados não movimentam suas contas nem aumentam o patrimônio. Registre pagamentos ou transferências em Lançamentos.</p>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
         <div className="page-header" style={{ marginBottom: 0 }}>
           <h1>Metas Financeiras</h1>

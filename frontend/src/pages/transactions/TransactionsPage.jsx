@@ -1,4 +1,8 @@
-import { useState, useEffect } from 'react';
+import PairTransferModal from '../../components/ui/PairTransferModal';
+import TransferModal from '../../components/ui/TransferModal';
+import DataError from '../../components/ui/DataError';
+import { signedAmount } from '../../utils/finance';
+import { useState, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   flexRender,
@@ -22,10 +26,11 @@ export default function TransactionsPage() {
   const urlParams = new URLSearchParams(location.search);
   const uncategorizedFilter = urlParams.get('category') === 'uncategorized';
 
-  const [activeTab, setActiveTab] = useState(uncategorizedFilter ? 'all' : 'monthly');
+  const [activeTab, setActiveTab] = useState(urlParams.get('status') === 'pending' ? 'pending' : uncategorizedFilter ? 'all' : 'monthly');
   const [transactions, setTransactions] = useState([]);
   const [summary, setSummary] = useState({ income: 0, expenses: 0, balance: 0, byCategory: [] });
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear] = useState(new Date().getFullYear());
   const [page, setPage] = useState(1);
@@ -33,7 +38,9 @@ export default function TransactionsPage() {
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState({ description: '', amount: '', type: 'expense', date: new Date().toISOString().split('T')[0], category_id: '', account_type: 'personal' });
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [pairingTransaction, setPairingTransaction] = useState(null);
+  const [form, setForm] = useState({ description: '', amount: '', type: 'expense', date: new Date().toISOString().split('T')[0], category_id: '', account_id: '', economic_kind: 'standard' });
   const [sorting, setSorting] = useState([]);
   const [categories, setCategories] = useState([]);
   const [editingTx, setEditingTx] = useState(null);
@@ -44,23 +51,11 @@ export default function TransactionsPage() {
   const [showBulkEditModal, setShowBulkEditModal] = useState(false);
   const [bulkEditForm, setBulkEditForm] = useState({ category_id: '', subcategory: '' });
 
-  useEffect(() => {
-    loadData();
-    loadDropdownParams();
-  }, [activeTab, month, year, page, currentWorkspace]); // Reload on workspace change
-
-  // Fetch when search changes (debounce via useQuery would be better, but doing simple here)
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData();
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [search]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      const params = {};
+      const params = activeTab === 'pending' ? { status: 'pending' } : {};
       if (currentWorkspace !== 'all') params.workspace = currentWorkspace;
 
       if (activeTab === 'monthly') {
@@ -82,26 +77,19 @@ export default function TransactionsPage() {
         setTotalPages(result.totalPages || 1);
       }
       setRowSelection({}); // reset selection on new load
-    } catch {
-      // Demo fallback
-      setTransactions([
-        { id: '1', description: 'TRANSFERENCIA PIX REM: HEY MU LTDA 05/12', amount: 439, type: 'income', date: '2025-12-04', categories: { name: 'Teste', icon: '📦' } },
-        { id: '2', description: 'TRANSFERENCIA PIX DES: Jade Santos De Moraes 05/12', amount: -439, type: 'expense', date: '2025-12-04', categories: { name: 'Ajustes', icon: '⚙️' } },
-        { id: '3', description: 'TRANSFERENCIA PIX REM: HEY MU LTDA 03/12', amount: 3240, type: 'income', date: '2025-12-02', categories: { name: 'Outros', icon: '📦' } },
-        { id: '4', description: 'PIX QR CODE DINAMICO DES: BRASIL VARIEDADES 03/12', amount: -49, type: 'expense', date: '2025-12-02', categories: { name: 'Outros', icon: '📦' } },
-      ]);
-      setSummary({ income: 3829, expenses: 49, balance: 3779, byCategory: [{ name: 'Outros', total: 49 }] });
+    } catch (err) {
+      setError(err);
     } finally {
       setLoading(false);
     }
-  };
+ }, [activeTab, currentWorkspace, month, year, page, search, uncategorizedFilter]);
 
   const loadDropdownParams = async () => {
     try {
       const [cats, accs, fam] = await Promise.all([
         api.getCategories(),
         api.getAccounts(),
-        api.getFamily()
+        Promise.resolve({ members: [] })
       ]);
       setCategories(cats || []);
       setAccounts(accs || []);
@@ -111,13 +99,16 @@ export default function TransactionsPage() {
     }
   };
 
+  useEffect(() => { const timer = setTimeout(loadData, 250); return () => clearTimeout(timer); }, [loadData]);
+  useEffect(() => { void loadDropdownParams(); }, []);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
       const amount = parseFloat(form.amount);
-      await api.createTransaction({ ...form, amount: form.type === 'expense' ? -Math.abs(amount) : Math.abs(amount) });
+      await api.createTransaction({ ...form, category_id: form.category_id || null, subcategory: form.subcategory || null, amount: signedAmount(amount, form.type) });
       setShowModal(false);
-      setForm({ description: '', amount: '', type: 'expense', date: new Date().toISOString().split('T')[0], category_id: '', account_type: 'personal' });
+      setForm({ description: '', amount: '', type: 'expense', date: new Date().toISOString().split('T')[0], category_id: '', account_id: '', economic_kind: 'standard' });
       loadData();
     } catch (err) {
       alert('Erro ao salvar: ' + err.message);
@@ -149,7 +140,8 @@ export default function TransactionsPage() {
         <input
           type="checkbox"
           checked={table.getIsAllPageRowsSelected()}
-          indeterminate={table.getIsSomePageRowsSelected()}
+          aria-checked={table.getIsSomePageRowsSelected() ? 'mixed' : table.getIsAllPageRowsSelected()}
+          aria-label="Selecionar lançamentos desta página"
           onChange={table.getToggleAllPageRowsSelectedHandler()}
           style={{ width: '1rem', height: '1rem', cursor: 'pointer' }}
         />
@@ -159,7 +151,7 @@ export default function TransactionsPage() {
           <input
             type="checkbox"
             checked={row.getIsSelected()}
-            disabled={!row.getCanSelect()}
+            aria-label={`Selecionar ${row.original.description}`} disabled={!row.getCanSelect()}
             onChange={row.getToggleSelectedHandler()}
             style={{ width: '1rem', height: '1rem', cursor: 'pointer' }}
           />
@@ -223,7 +215,7 @@ export default function TransactionsPage() {
   const handleBulkDelete = async () => {
     if (selectedRows.length === 0) return;
     if (!window.confirm(`Tem certeza que deseja excluir as ${selectedRows.length} transações selecionadas permanentemente?`)) return;
-    
+
     setBulkActionBusy(true);
     try {
       for (const tx of selectedRows) {
@@ -241,11 +233,11 @@ export default function TransactionsPage() {
   const handleBulkEditSubmit = async (e) => {
     e.preventDefault();
     if (selectedRows.length === 0 || !bulkEditForm.category_id) return;
-    
+
     setBulkActionBusy(true);
     try {
       for (const tx of selectedRows) {
-        await api.updateTransaction(tx.id, { 
+        await api.updateTransaction(tx.id, {
           category_id: bulkEditForm.category_id,
           subcategory: bulkEditForm.subcategory || null
         });
@@ -260,6 +252,7 @@ export default function TransactionsPage() {
     }
   };
 
+  if (error) return <DataError error={error} onRetry={loadData} />;
   return (
     <div>
       {/* Header */}
@@ -270,17 +263,29 @@ export default function TransactionsPage() {
         </div>
         <div className="page-header-actions">
           <button className="btn btn-primary" onClick={() => setShowModal(true)}><Plus size={16} /> Nova Transação</button>
-          <button className="btn btn-secondary" onClick={loadData}><RefreshCw size={16} /> Recalcular</button>
+          <button className="btn btn-secondary" onClick={() => setShowTransfer(true)}>Movimentar entre contas</button>
+          <button className="btn btn-secondary" onClick={loadData}><RefreshCw size={16} /> Atualizar</button>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="tabs" style={{ width: 'fit-content', marginBottom: '1.5rem' }}>
-        {[{ key: 'monthly', label: 'Histórico Mensal' }, { key: 'all', label: 'Todas as Transações' }].map(tab => (
+        {[{ key: 'monthly', label: 'Histórico Mensal' }, { key: 'all', label: 'Todas as Transações' }, { key: 'pending', label: 'Legado a revisar' }].map(tab => (
           <button key={tab.key} className={`tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)}>{tab.label}</button>
         ))}
       </div>
 
+      {activeTab === 'pending' && <p className="card">Lançamentos legados ainda não confirmados. Abra cada um, confira conta, valor e natureza e salve para registrar sua revisão. Transferências exigem pareamento.</p>}
+      {Object.keys(rowSelection).filter(key => rowSelection[key]).length === 2 && <button className="btn btn-primary" onClick={async () => {
+        const selectedRows = table.getSelectedRowModel().rows.map(row => row.original);
+        const source = selectedRows.find(tx => Number(tx.amount) < 0); const destination = selectedRows.find(tx => Number(tx.amount) > 0);
+        if (!source || !destination) { alert('Selecione uma saída e uma entrada de mesmo valor.'); return; }
+        if (!confirm('Vincular estes lançamentos como uma movimentação entre contas?')) return;
+        try { await api.request('/transactions/transfers/link', { method: 'PATCH', body: { source_transaction_id: source.id, destination_transaction_id: destination.id } }); await loadData(); } catch (err) { alert(err.message); }
+      }}>Parear os 2 lançamentos selecionados</button>}
+      {selectedRows.length === 1 && activeTab !== 'pending' && !selectedRows[0].linked_transaction_id && !selectedRows[0].reversal_of && <button className="btn btn-secondary" onClick={() => setPairingTransaction(selectedRows[0])}>Buscar contraparte em todas as páginas</button>}
+      {pairingTransaction && <PairTransferModal transaction={pairingTransaction} onClose={() => setPairingTransaction(null)} onSaved={loadData} />}
+      {showTransfer && <TransferModal accounts={accounts} onSaved={loadData} onClose={() => setShowTransfer(false)} />}
       {/* Monthly Navigation */}
       {activeTab === 'monthly' && (
         <div className="date-nav">
@@ -311,7 +316,7 @@ export default function TransactionsPage() {
       {activeTab === 'all' && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            💡 Transferências relacionadas são agrupadas automaticamente
+            Selecione um lançamento para buscar sua contraparte, ou dois para parear após conferência
           </span>
         </div>
       )}
@@ -344,12 +349,12 @@ export default function TransactionsPage() {
         ) : activeTab === 'all' ? (
           <>
             {selectedRows.length > 0 && (
-              <div style={{ 
-                padding: '0.75rem 1rem', 
-                background: 'var(--color-primary-fade)', 
-                borderBottom: '1px solid var(--border-color)', 
-                display: 'flex', 
-                justifyContent: 'space-between', 
+              <div style={{
+                padding: '0.75rem 1rem',
+                background: 'var(--color-primary-fade)',
+                borderBottom: '1px solid var(--border-color)',
+                display: 'flex',
+                justifyContent: 'space-between',
                 alignItems: 'center',
                 borderTopLeftRadius: 'var(--border-radius-lg)',
                 borderTopRightRadius: 'var(--border-radius-lg)'
@@ -358,16 +363,16 @@ export default function TransactionsPage() {
                   {selectedRows.length} selecionada(s)
                 </span>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button 
-                    className="btn btn-secondary btn-sm" 
+                  <button
+                    className="btn btn-secondary btn-sm"
                     onClick={() => setShowBulkEditModal(true)}
                     disabled={bulkActionBusy}
                     style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)', background: 'transparent' }}
                   >
                     ✏️ Editar Categorias
                   </button>
-                  <button 
-                    className="btn btn-secondary btn-sm" 
+                  <button
+                    className="btn btn-secondary btn-sm"
                     onClick={handleBulkDelete}
                     disabled={bulkActionBusy}
                     style={{ borderColor: 'var(--color-danger)', color: 'var(--color-danger)', background: 'transparent' }}
@@ -383,9 +388,9 @@ export default function TransactionsPage() {
                   {table.getHeaderGroups().map(headerGroup => (
                     <tr key={headerGroup.id} style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
                       {headerGroup.headers.map(header => (
-                        <th 
-                          key={header.id} 
-                          onClick={header.column.getToggleSortingHandler()} 
+                        <th
+                          key={header.id}
+                          onClick={header.column.getToggleSortingHandler()}
                           style={{ padding: '1rem', color: 'var(--text-muted)', fontWeight: 600, cursor: header.column.getCanSort() ? 'pointer' : 'default', whiteSpace: 'nowrap', textAlign: header.id === 'amount' ? 'right' : 'left' }}
                         >
                           {flexRender(header.column.columnDef.header, header.getContext())}
@@ -397,10 +402,10 @@ export default function TransactionsPage() {
                 </thead>
                 <tbody>
                   {table.getRowModel().rows.map(row => (
-                    <tr 
-                      key={row.id} 
+                    <tr
+                      key={row.id}
                       onClick={() => setEditingTx(row.original)}
-                      style={{ borderBottom: '1px solid var(--border-color)', transition: 'background 0.2s', cursor: 'pointer', background: row.getIsSelected() ? 'var(--bg-secondary)' : 'transparent' }} 
+                      style={{ borderBottom: '1px solid var(--border-color)', transition: 'background 0.2s', cursor: 'pointer', background: row.getIsSelected() ? 'var(--bg-secondary)' : 'transparent' }}
                       className="table-row-hover"
                     >
                       {row.getVisibleCells().map(cell => (
@@ -460,11 +465,11 @@ export default function TransactionsPage() {
                 <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value, category_id: '' })}>
                   <option value="income">Receita</option>
                   <option value="expense">Despesa</option>
-                  <option value="transfer">Transferência</option>
+
                 </select>
               </div>
             </div>
-            
+
             <div className="grid grid-2" style={{ gap: '1rem' }}>
               <div className="form-group">
                 <label>Descrição *</label>
@@ -472,7 +477,7 @@ export default function TransactionsPage() {
               </div>
               <div className="form-group">
                 <label>Categoria</label>
-                <InlineCategorySelect 
+                <InlineCategorySelect
                   categories={categories}
                   value={form.category_id}
                   onChange={(val) => setForm({ ...form, category_id: val, subcategory: '' })}
@@ -482,8 +487,8 @@ export default function TransactionsPage() {
               </div>
               <div className="form-group">
                 <label>Subcategoria</label>
-                <select 
-                  value={form.subcategory || ''} 
+                <select
+                  value={form.subcategory || ''}
                   onChange={e => setForm({ ...form, subcategory: e.target.value })}
                   disabled={!form.category_id}
                 >
@@ -501,14 +506,11 @@ export default function TransactionsPage() {
                 <input type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} placeholder="0,00" required />
               </div>
               <div className="form-group">
-                <label>Tipo de Conta</label>
-                <select value={form.account_type} onChange={e => setForm({ ...form, account_type: e.target.value })}>
-                  <option value="personal">Pessoal</option>
-                  <option value="business">Empresarial</option>
-                </select>
+                <label>Conta *</label><select required value={form.account_id} onChange={e => setForm({ ...form, account_id: e.target.value })}><option value="">Selecione…</option>{accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+                <label>Natureza</label><select value={form.economic_kind} onChange={e => setForm({ ...form, economic_kind: e.target.value })}><option value="standard">Receita / despesa</option><option value="owner_contribution">Aporte</option><option value="owner_withdrawal">Retirada</option><option value="loan_principal">Principal de empréstimo</option></select>
               </div>
             </div>
-            
+
             <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
               <button type="button" className="btn btn-secondary flex-1" onClick={() => setShowModal(false)}>Cancelar</button>
               <button type="submit" className="btn btn-primary flex-1" disabled={loading}>{loading ? 'Salvando...' : 'Salvar'}</button>
@@ -526,7 +528,8 @@ export default function TransactionsPage() {
         family={family}
         onSave={async (id, data) => {
           try {
-            await api.updateTransaction(id, data);
+            if (activeTab === 'pending') await api.request(`/transactions/${id}/review`, { method: 'POST', body: data });
+            else await api.updateTransaction(id, data);
             setEditingTx(null);
             loadData();
           } catch (err) { alert('Erro ao salvar: ' + err.message); }
@@ -546,21 +549,21 @@ export default function TransactionsPage() {
         <form onSubmit={handleBulkEditSubmit}>
           <div style={{ paddingBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Você está editando {selectedRows.length} transações simultaneamente. Apenas a categoria e subcategoria serão alteradas.</p>
-            
+
             <div className="form-group">
               <label>Nova Categoria</label>
-              <InlineCategorySelect 
+              <InlineCategorySelect
                 categories={categories}
                 value={bulkEditForm.category_id}
                 onChange={(val) => setBulkEditForm({ category_id: val, subcategory: '' })}
                 onCategoryCreated={loadDropdownParams}
               />
             </div>
-            
+
             <div className="form-group">
               <label>Nova Subcategoria</label>
-              <select 
-                value={bulkEditForm.subcategory} 
+              <select
+                value={bulkEditForm.subcategory}
                 onChange={e => setBulkEditForm({ ...bulkEditForm, subcategory: e.target.value })}
                 disabled={!bulkEditForm.category_id}
               >

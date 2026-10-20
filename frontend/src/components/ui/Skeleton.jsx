@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { motion as Motion } from 'framer-motion';
 
 const shimmerStyle = {
   background: 'linear-gradient(90deg, var(--bg-secondary) 25%, var(--bg-card) 50%, var(--bg-secondary) 75%)',
@@ -13,7 +13,7 @@ const shimmerAnimation = {
 
 export function SkeletonText({ width = '100%', height = 14, style = {} }) {
   return (
-    <motion.div
+    <Motion.div
       style={{ ...shimmerStyle, width, height, ...style }}
       {...shimmerAnimation}
     />
@@ -22,7 +22,7 @@ export function SkeletonText({ width = '100%', height = 14, style = {} }) {
 
 export function SkeletonCard({ height = 120, style = {} }) {
   return (
-    <motion.div
+    <Motion.div
       style={{ ...shimmerStyle, width: '100%', height, borderRadius: 'var(--border-radius-md)', ...style }}
       {...shimmerAnimation}
     />
@@ -31,7 +31,7 @@ export function SkeletonCard({ height = 120, style = {} }) {
 
 export function SkeletonCircle({ size = 40, style = {} }) {
   return (
-    <motion.div
+    <Motion.div
       style={{ ...shimmerStyle, width: size, height: size, borderRadius: '50%', ...style }}
       {...shimmerAnimation}
     />

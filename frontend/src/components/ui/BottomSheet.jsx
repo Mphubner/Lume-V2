@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence, useDragControls } from 'framer-motion';
+import { useState, useEffect, useRef } from 'react';
+import { motion as Motion, AnimatePresence } from 'framer-motion';
 import { X } from 'lucide-react';
 
 const OVERLAY_VARIANTS = {
@@ -21,7 +21,24 @@ const MODAL_VARIANTS = {
 };
 
 export default function BottomSheet({ isOpen, onClose, title, children, maxWidth = 520 }) {
-  const [isMobile, setIsMobile] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 900);
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    const previous = document.activeElement;
+    const focusable = () => [...(dialogRef.current?.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], textarea:not([disabled])') || [])];
+    const timer = setTimeout(() => focusable()[0]?.focus(), 0);
+    const keydown = event => {
+      if (event.key === 'Escape') onClose();
+      if (event.key === 'Tab') {
+        const items = focusable(); const first = items[0]; const last = items.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    };
+    document.addEventListener('keydown', keydown);
+    return () => { clearTimeout(timer); document.removeEventListener('keydown', keydown); previous?.focus(); };
+  }, [isOpen, onClose]);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth <= 900);
@@ -35,7 +52,7 @@ export default function BottomSheet({ isOpen, onClose, title, children, maxWidth
       {isOpen && (
         <>
           {/* Overlay */}
-          <motion.div
+          <Motion.div
             className="modal-overlay"
             variants={OVERLAY_VARIANTS}
             initial="hidden"
@@ -47,7 +64,8 @@ export default function BottomSheet({ isOpen, onClose, title, children, maxWidth
 
           {isMobile ? (
             /* ===== MOBILE: Bottom Sheet ===== */
-            <motion.div
+            <Motion.div
+              ref={dialogRef} role="dialog" aria-modal="true" aria-label={title}
               variants={SHEET_VARIANTS}
               initial="hidden"
               animate="visible"
@@ -79,7 +97,7 @@ export default function BottomSheet({ isOpen, onClose, title, children, maxWidth
               {/* Header */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 1.25rem 1rem' }}>
                 <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{title}</h3>
-                <button onClick={onClose} style={{ background: 'transparent', color: 'var(--text-muted)', padding: '0.25rem' }}>
+                <button aria-label="Fechar janela" onClick={onClose} style={{ background: 'transparent', color: 'var(--text-muted)', padding: '0.25rem' }}>
                   <X size={20} />
                 </button>
               </div>
@@ -88,10 +106,11 @@ export default function BottomSheet({ isOpen, onClose, title, children, maxWidth
               <div style={{ padding: '0 1.25rem 1.5rem' }}>
                 {children}
               </div>
-            </motion.div>
+            </Motion.div>
           ) : (
             /* ===== DESKTOP: Centered Modal ===== */
-            <motion.div
+            <Motion.div
+              ref={dialogRef} role="dialog" aria-modal="true" aria-label={title}
               variants={MODAL_VARIANTS}
               initial="hidden"
               animate="visible"
@@ -116,7 +135,7 @@ export default function BottomSheet({ isOpen, onClose, title, children, maxWidth
               {/* Header */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border-color)' }}>
                 <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{title}</h3>
-                <button onClick={onClose} style={{ background: 'transparent', color: 'var(--text-muted)', padding: '0.25rem' }}>
+                <button aria-label="Fechar janela" onClick={onClose} style={{ background: 'transparent', color: 'var(--text-muted)', padding: '0.25rem' }}>
                   <X size={20} />
                 </button>
               </div>
@@ -125,7 +144,7 @@ export default function BottomSheet({ isOpen, onClose, title, children, maxWidth
               <div style={{ padding: '1.25rem 1.5rem' }}>
                 {children}
               </div>
-            </motion.div>
+            </Motion.div>
           )}
         </>
       )}

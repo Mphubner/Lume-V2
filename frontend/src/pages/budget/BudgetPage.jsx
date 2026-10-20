@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import DataError from '../../components/ui/DataError';
+import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import StatCard from '../../components/ui/StatCard';
 import { formatCurrency, getMonthName } from '../../utils/format';
@@ -6,7 +7,8 @@ import { Sparkles, Plus, Trash2, ChevronLeft, ChevronRight, RefreshCw, AlertTria
 
 export default function BudgetPage() {
   const [budgets, setBudgets] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear] = useState(new Date().getFullYear());
@@ -15,36 +17,34 @@ export default function BudgetPage() {
   const [form, setForm] = useState({ category_id: '', planned_amount: '' });
   const [aiSuggestion, setAiSuggestion] = useState(null);
 
-  useEffect(() => { loadBudgets(); loadCategories(); }, [month, year]);
-
-  const loadBudgets = async () => {
-    setLoading(true);
+  const loadBudgets = useCallback(async () => {
+    setLoading(true); setError(null);
     try {
       const result = await api.getBudgets({ month, year });
       setBudgets(result || []);
-    } catch {
-      // Sem dados demo — mostra empty state
-      setBudgets([]);
-    } finally { setLoading(false); }
-  };
+    } catch (err) { setError(err); } finally { setLoading(false); }
+ }, [month, year]);
 
-  const loadCategories = async () => {
-    try { const result = await api.getCategories(); setCategories(result || []); } catch {}
-  };
+  const loadCategories = useCallback(async () => {
+    try { const result = await api.getCategories(); setCategories(result || []); } catch (error) { setError(error); }
+  }, []);
+  useEffect(() => { void loadBudgets(); void loadCategories(); }, [loadBudgets, loadCategories]);
 
   const totalPlanned = budgets.reduce((s, b) => s + parseFloat(b.planned_amount), 0);
-  const totalSpent = budgets.reduce((s, b) => s + parseFloat(b.spent_amount || 0), 0);
+  const amountsKnown = budgets.every(b => b.spent_amount != null);
+  const coverageComplete = budgets.length > 0 && budgets.every(b => b.coverage?.complete);
+  const totalSpent = amountsKnown ? budgets.reduce((s, b) => s + Number(b.spent_amount), 0) : null;
   const overBudget = budgets.filter(b => parseFloat(b.spent_amount || 0) > parseFloat(b.planned_amount));
-  const underBudget = budgets.filter(b => parseFloat(b.spent_amount || 0) <= parseFloat(b.planned_amount));
 
   const generateWithAI = async () => {
     setAiLoading(true);
     try {
       const result = await api.generateBudget({ month, year });
       setAiSuggestion(result);
-    } catch {
+    } catch (error) {
       // Sem sugestão demo
       setAiSuggestion(null);
+      setError(error);
     } finally { setAiLoading(false); }
   };
 
@@ -60,23 +60,27 @@ export default function BudgetPage() {
 
   const handleDelete = async (id) => {
     if (!confirm('Remover este orçamento?')) return;
-    try { await api.request(`/budgets/${id}`, { method: 'DELETE' }); loadBudgets(); } catch {}
+    try { await api.request(`/budgets/${id}`, { method: 'DELETE' }); loadBudgets(); } catch (error) { console.error(error); }
   };
 
   const prevMonth = () => { if (month === 1) { setMonth(12); setYear(year - 1); } else setMonth(month - 1); };
   const nextMonth = () => { if (month === 12) { setMonth(1); setYear(year + 1); } else setMonth(month + 1); };
 
   const getProgressPct = (b) => {
+    if (b.spent_amount == null) return null;
+    if (Number(b.planned_amount) === 0) return Number(b.spent_amount) > 0 ? 100 : 0;
     const pct = (parseFloat(b.spent_amount || 0) / parseFloat(b.planned_amount)) * 100;
     return Math.min(100, pct);
   };
   const getProgressColor = (b) => {
     const pct = getProgressPct(b);
+    if (pct === null) return 'var(--text-muted)';
     if (pct >= 100) return 'var(--color-danger)';
     if (pct >= 80) return 'var(--color-warning)';
     return 'var(--color-success)';
   };
 
+  if (error) return <DataError error={error} onRetry={loadBudgets} />;
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
@@ -87,7 +91,7 @@ export default function BudgetPage() {
         <div className="page-header-actions">
           <button className="btn btn-primary" onClick={() => setShowModal(true)}><Plus size={16} /> Adicionar Limite</button>
           <button className="btn btn-secondary" onClick={generateWithAI} disabled={aiLoading}>
-            <Sparkles size={16} /> {aiLoading ? 'Gerando...' : 'Gerar com IA'}
+            <Sparkles size={16} /> {aiLoading ? 'Calculando...' : 'Sugerir pelos dados revisados'}
           </button>
         </div>
       </div>
@@ -100,11 +104,12 @@ export default function BudgetPage() {
       </div>
 
       {/* Stats */}
+      <p role="status">{coverageComplete ? 'Cobertura conferida para o período.' : 'Cobertura parcial ou período futuro. Valores não confirmados permanecem indisponíveis; gastos ainda não revisados não entram nos totais.'}</p>
       <div className="grid grid-4" style={{ marginBottom: '1.5rem' }}>
         <StatCard label="Planejado Total" value={formatCurrency(totalPlanned)} variant="balance" />
         <StatCard label="Gasto Atual" value={formatCurrency(totalSpent)} variant={totalSpent > totalPlanned ? 'expense' : 'income'} />
-        <StatCard label="Disponível" value={formatCurrency(Math.max(0, totalPlanned - totalSpent))} variant="savings" />
-        <StatCard label="Categorias Excedidas" value={String(overBudget.length)} sub={overBudget.length > 0 ? '⚠️ Atenção!' : '✅ Tudo OK'} variant="neutral" />
+        <StatCard label="Disponível" value={formatCurrency(totalSpent === null ? null : Math.max(0, totalPlanned - totalSpent))} variant="savings" />
+        <StatCard label="Categorias Excedidas" value={amountsKnown ? String(overBudget.length) : 'Não confirmado'} sub={overBudget.length > 0 ? '⚠️ Atenção!' : coverageComplete ? 'Nenhum limite excedido' : 'Aguardando cobertura'} variant="neutral" />
       </div>
 
       {/* AI Suggestion Panel */}
@@ -113,8 +118,8 @@ export default function BudgetPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
             <Sparkles size={20} style={{ color: 'var(--accent-purple)' }} />
             <div>
-              <div style={{ fontWeight: 600, color: 'var(--accent-purple)' }}>Sugestão da IA</div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Baseado nos seus gastos dos últimos 3 meses</div>
+              <div style={{ fontWeight: 600, color: 'var(--accent-purple)' }}>Sugestão calculada</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{aiSuggestion.notice || 'Baseada nos meses conferidos disponíveis. Revise antes de criar limites.'}</div>
             </div>
             <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setAiSuggestion(null)}>Fechar</button>
           </div>
@@ -142,10 +147,10 @@ export default function BudgetPage() {
           <div className="empty-state">
             <div className="empty-state-icon">📊</div>
             <h3>Crie seu Plano do Mês</h3>
-            <p>Defina limites por categoria ou deixe a IA sugerir baseado nos seus gastos</p>
+            <p>Defina limites por categoria ou calcule uma sugestão usando gastos revisados.</p>
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
               <button className="btn btn-primary" onClick={() => setShowModal(true)}><Plus size={16} /> Manual</button>
-              <button className="btn btn-secondary" onClick={generateWithAI}><Sparkles size={16} /> Gerar com IA</button>
+              <button className="btn btn-secondary" onClick={generateWithAI}><Sparkles size={16} /> Calcular sugestão</button>
             </div>
           </div>
         </div>
@@ -167,18 +172,18 @@ export default function BudgetPage() {
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Gasto: <strong style={{ color: isOver ? 'var(--color-danger)' : 'var(--text-primary)' }}>{formatCurrency(b.spent_amount || 0)}</strong></span>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Gasto: <strong style={{ color: isOver ? 'var(--color-danger)' : 'var(--text-primary)' }}>{formatCurrency(b.spent_amount)}</strong></span>
                   <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Limite: <strong>{formatCurrency(b.planned_amount)}</strong></span>
                 </div>
 
                 <div style={{ height: 10, background: 'var(--bg-secondary)', borderRadius: 5, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${getProgressPct(b)}%`, background: getProgressColor(b), borderRadius: 5, transition: 'width 0.5s' }} />
+                  <div style={{ height: '100%', width: `${getProgressPct(b) ?? 0}%`, background: getProgressColor(b), borderRadius: 5, transition: 'width 0.5s' }} />
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.5rem' }}>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{getProgressPct(b).toFixed(0)}% utilizado</span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{getProgressPct(b) == null ? 'Utilização não confirmada' : `${getProgressPct(b).toFixed(0)}% utilizado`}</span>
                   <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isOver ? 'var(--color-danger)' : 'var(--color-success)' }}>
-                    {isOver ? `- ${formatCurrency(parseFloat(b.spent_amount) - parseFloat(b.planned_amount))}` : `${formatCurrency(parseFloat(b.planned_amount) - parseFloat(b.spent_amount || 0))} restante`}
+                    {b.spent_amount == null ? 'Saldo não confirmado' : isOver ? `- ${formatCurrency(Number(b.spent_amount) - Number(b.planned_amount))}` : `${formatCurrency(Number(b.planned_amount) - Number(b.spent_amount))} restante`}
                   </span>
                 </div>
               </div>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Sun, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
 
@@ -15,6 +15,7 @@ const GoogleIcon = () => (
 export default function LoginPage() {
   const { signIn, signInWithEmail, isDemoMode } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -38,7 +39,8 @@ export default function LoginPage() {
     setError('');
     try {
       await signInWithEmail(email, password);
-      navigate('/dashboard');
+      const from = location.state?.from;
+      navigate(from?.pathname?.startsWith('/') && !from.pathname.startsWith('//') ? from.pathname + (from.search || '') : '/dashboard');
     } catch (err) {
       const msg = err.message;
       if (msg.includes('Invalid login')) setError('Email ou senha incorretos.');
@@ -49,7 +51,8 @@ export default function LoginPage() {
   };
 
   const handleDemoLogin = () => {
-    navigate('/dashboard');
+    const from = location.state?.from;
+      navigate(from?.pathname?.startsWith('/') && !from.pathname.startsWith('//') ? from.pathname + (from.search || '') : '/dashboard');
   };
 
   return (
@@ -89,7 +92,7 @@ export default function LoginPage() {
               <p>Entre na sua conta para continuar</p>
             </div>
 
-            {error && <div className="auth-error">{error}</div>}
+            {error && <div className="auth-error" role="alert">{error}</div>}
 
             {/* Google OAuth */}
             <button className="auth-google-btn" onClick={handleGoogleLogin} disabled={loading}>
@@ -107,7 +110,7 @@ export default function LoginPage() {
                 <Mail size={18} className="auth-field-icon" />
                 <input
                   type="email"
-                  placeholder="seu@email.com"
+                  aria-label="seu@email.com" placeholder="seu@email.com"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   autoComplete="email"
@@ -117,12 +120,12 @@ export default function LoginPage() {
                 <Lock size={18} className="auth-field-icon" />
                 <input
                   type={showPassword ? 'text' : 'password'}
-                  placeholder="Sua senha"
+                  aria-label="Sua senha" placeholder="Sua senha"
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   autoComplete="current-password"
                 />
-                <button type="button" className="auth-field-toggle" onClick={() => setShowPassword(!showPassword)}>
+                <button type="button" aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"} className="auth-field-toggle" onClick={() => setShowPassword(!showPassword)}>
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>

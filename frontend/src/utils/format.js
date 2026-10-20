@@ -1,4 +1,5 @@
 export function formatCurrency(value) {
+  if (value == null || !Number.isFinite(Number(value))) return 'Não confirmado';
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
     currency: 'BRL',

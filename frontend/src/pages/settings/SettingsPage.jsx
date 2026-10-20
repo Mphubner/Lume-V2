@@ -1,13 +1,19 @@
-import { useState, useEffect } from 'react';
+import WorkspaceManagement from '../../components/ui/WorkspaceManagement';
+import SubscriptionSettings from '../../components/ui/SubscriptionSettings';
+import AccountReconciliation from '../../components/ui/AccountReconciliation';
+import DataError from '../../components/ui/DataError';
+import { useWorkspace } from '../../context/WorkspaceContext';
+import { localToday } from '../../utils/finance';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import { formatCurrency } from '../../utils/format';
-import calendarService from '../../services/calendarService';
-import { Save, Trash2, Plus, Edit3, Users, CreditCard, Settings as SettingsIcon, Calendar, Building2 } from 'lucide-react';
+import { Save, Trash2, Plus, Edit3, Users, CreditCard, Settings as SettingsIcon, Building2 } from 'lucide-react';
 
 export default function SettingsPage() {
-  const { profile, user, refreshProfile } = useAuth();
-  const [activeTab, setActiveTab] = useState('profile');
+  const { profile, refreshProfile } = useAuth();
+  const { currentWorkspace, workspaces } = useWorkspace();
+  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).has('payment') ? 'subscription' : 'profile');
   const [profileForm, setProfileForm] = useState({
     full_name: '', phone: '', cpf: '', cep: '', street: '', street_number: '', complement: '', neighborhood: '', city: '', state: '',
   });
@@ -19,17 +25,14 @@ export default function SettingsPage() {
   const [editingCategory, setEditingCategory] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [accountForm, setAccountForm] = useState({ name: '', type: 'checking', account_type: 'personal', institution: '', balance: '0', credit_limit: '', closing_day: '', due_day: '', color: '#d4a843', icon: '🏦' });
+  const [accountForm, setAccountForm] = useState({ name: '', type: 'checking', account_type: 'personal', institution: '', balance: '0', balance_date: localToday(), credit_limit: '', closing_day: '', due_day: '', color: '#d4a843', icon: '🏦' });
   const [saving, setSaving] = useState(false);
-  const [syncingCalendar, setSyncingCalendar] = useState(false);
-  const [familyData, setFamilyData] = useState({ hasFamily: false, members: [], families: [], businesses: [] });
-  const [showFamilyModal, setShowFamilyModal] = useState(false);
-  const [familyForm, setFamilyForm] = useState({ name: '', email: '', password: '', role: 'member', entity_id: '' });
-  const [showEntityModal, setShowEntityModal] = useState(false);
-  const [entityForm, setEntityForm] = useState({ name: '', members: [] });
+  const [editingAccount, setEditingAccount] = useState(null);
+  const [reconcilingAccount, setReconcilingAccount] = useState(null);
+  const [loadState, setLoadState] = useState({});
+  const [privacyNotice, setPrivacyNotice] = useState('');
   const [auditLogs, setAuditLogs] = useState([]);
 
-  const isGrantedMember = profile?.plan_status === 'granted';
 
   useEffect(() => {
     if (profile) {
@@ -41,124 +44,72 @@ export default function SettingsPage() {
     }
   }, [profile]);
 
+  const loadTab = useCallback(async (key, operation) => {
+    setLoadState(state => ({ ...state, [key]: { loading: true } }));
+    try { await operation(); setLoadState(state => ({ ...state, [key]: { loaded: true } })); }
+    catch (error) { setLoadState(state => ({ ...state, [key]: { error } })); }
+  }, []);
+  const loadAudit = useCallback(() => loadTab('audit', async () => { const logs = await api.getAuditLog(); setAuditLogs(Array.isArray(logs) ? logs : []); }), [loadTab]);
+  const loadAIRules = useCallback(() => loadTab('ai', async () => { const result = await api.getAIRules(); setAiRules(result.rules || []); setAiStats(result.stats); }), [loadTab]);
+  const loadCategories = useCallback(() => loadTab('categories', async () => { setCategories(await api.getCategories()); }), [loadTab]);
+  const loadAccounts = useCallback(() => loadTab('accounts', async () => { setAccounts(await api.getAccounts()); }), [loadTab]);
   useEffect(() => {
-    if (activeTab === 'ai') loadAIRules();
-    if (activeTab === 'preferences') { loadCategories(); loadAccounts(); }
-    if (activeTab === 'family') loadFamily();
-    if (activeTab === 'audit') loadAudit();
-  }, [activeTab]);
-
-  const loadAudit = async () => {
-    try {
-      const logs = await api.getAuditLog();
-      setAuditLogs(Array.isArray(logs) ? logs : []);
-    } catch (err) { console.error('Audit load error', err); }
-  };
-
-  const loadAIRules = async () => {
-    try { const result = await api.getAIRules(); setAiRules(result.rules || []); setAiStats(result.stats || aiStats); } catch {
-      setAiRules([
-        { id: '1', keyword: 'SUPERMERCADO', categories: { name: 'Alimentação', icon: '🍔' }, is_active: true, usage_count: 56 },
-        { id: '2', keyword: 'UBER', categories: { name: 'Transporte', icon: '🚗' }, is_active: true, usage_count: 38 },
-        { id: '3', keyword: 'NETFLIX', categories: { name: 'Lazer', icon: '🎮' }, is_active: true, usage_count: 12 },
-        { id: '4', keyword: 'FARMACIA', categories: { name: 'Saúde', icon: '💊' }, is_active: true, usage_count: 22 },
-        { id: '5', keyword: 'RESTAURANTE', categories: { name: 'Alimentação', icon: '🍔' }, is_active: true, usage_count: 44 },
-        { id: '6', keyword: 'IFOOD', categories: { name: 'Alimentação', icon: '🍔' }, is_active: true, usage_count: 67 },
-      ]);
-      setAiStats({ activeRules: 6, totalApplications: 239, totalRules: 6 });
-    }
-  };
-  const loadCategories = async () => {
-    try { const result = await api.getCategories(); setCategories(result || []); } catch {}
-  };
-  const loadAccounts = async () => {
-    try { const result = await api.getAccounts(); setAccounts(result || []); } catch {
-      setAccounts([
-        { id: '1', name: 'Nubank', type: 'checking', institution: 'Nubank', balance: 3240, color: '#8b5cf6', icon: '🟣' },
-        { id: '2', name: 'Itaú CC', type: 'checking', institution: 'Itaú', balance: 1500, color: '#f97316', icon: '🟠' },
-        { id: '3', name: 'Nubank Cartão', type: 'credit_card', institution: 'Nubank', credit_limit: 8000, closing_day: 3, due_day: 10, color: '#8b5cf6', icon: '💳' },
-      ]);
-    }
-  };
-
-  const loadFamily = async () => {
-    try {
-      const result = await api.getFamily();
-      setFamilyData({
-        hasFamily: result.hasFamily,
-        members: result.members || [],
-        families: result.families || [],
-        businesses: result.businesses || [],
-      });
-    } catch (err) { console.error(err); }
-  };
-
-  const createFamilyMember = async (e) => {
-    e.preventDefault();
+    if (activeTab === 'ai') void loadAIRules();
+    if (activeTab === 'preferences') { void loadCategories(); void loadAccounts(); }
+    if (activeTab === 'audit') void loadAudit();
+  }, [activeTab, currentWorkspace, loadAIRules, loadCategories, loadAccounts, loadAudit]);
+  const tabErrors = activeTab === 'preferences' ? ['accounts', 'categories'] : [activeTab];
+  const errorKey = tabErrors.find(key => loadState[key]?.error);
+  const tabReady = !['preferences', 'audit', 'ai'].includes(activeTab) || tabErrors.every(key => loadState[key]?.loaded);
+  const retryTab = () => { if (activeTab === 'preferences') { loadAccounts(); loadCategories(); } else if (activeTab === 'ai') loadAIRules(); else loadAudit(); };
+  const exportData = async () => {
     setSaving(true);
     try {
-      const payload = { ...familyForm };
-      if (!payload.entity_id) delete payload.entity_id; // Let backend use default family
-      await api.createFamilyMember(payload);
-      setShowFamilyModal(false);
-      setFamilyForm({ name: '', email: '', password: '', role: 'member', entity_id: '' });
-      alert('Membro adicionado com sucesso!');
-      loadFamily();
-    } catch (err) {
-      alert(err.message || 'Erro ao criar usuário.');
-    } finally {
-      setSaving(false);
-    }
+      const data = await api.request('/profile/export');
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+      const link = document.createElement('a'); link.href = url; link.download = 'lume-dados.json'; link.click(); URL.revokeObjectURL(url);
+      setPrivacyNotice('Arquivo gerado com os dados autorizados do contexto selecionado.');
+    } catch (error) { setPrivacyNotice(error.message); } finally { setSaving(false); }
   };
-
-  const createEntity = async (e) => {
-    e.preventDefault();
+  const privacyRequest = async kind => {
+    if (kind === 'deletion' && !confirm('Registrar solicitação de exclusão de dados? A análise pode exigir retenções legais e não é uma exclusão imediata.')) return;
     setSaving(true);
-    try {
-      await api.createEntity({ name: entityForm.name, type: 'business', members: entityForm.members || [] });
-      setShowEntityModal(false);
-      setEntityForm({ name: '', members: [] });
-      alert('Empresa cadastrada com sucesso!');
-      loadFamily();
-    } catch (err) {
-      alert(err.message || 'Erro ao cadastrar empresa.');
-    } finally {
-      setSaving(false);
-    }
+    try { const result = await api.request('/profile/privacy-request', { method: 'POST', body: { kind } }); setPrivacyNotice(`Solicitação registrada: ${result.id}. Situação: pendente de atendimento. Nenhum dado foi excluído automaticamente.`); }
+    catch (error) { setPrivacyNotice(error.message); } finally { setSaving(false); }
   };
 
   const saveProfile = async () => {
     setSaving(true);
-    try { 
-       await api.updateProfile(profileForm); 
+    try {
+       await api.updateProfile(profileForm);
        if (refreshProfile) await refreshProfile();
-       alert('Perfil salvo com sucesso!'); 
-    } catch (err) { 
-       alert('Erro ao salvar Perfil: ' + err.message); 
-    } finally { 
-       setSaving(false); 
+       alert('Perfil salvo com sucesso!');
+    } catch (err) {
+       alert('Erro ao salvar Perfil: ' + err.message);
+    } finally {
+       setSaving(false);
     }
   };
 
   const deleteRule = async (id) => {
-    try { await api.deleteAIRule(id); loadAIRules(); } catch {}
+    try { await api.deleteAIRule(id); loadAIRules(); } catch (error) { console.error(error); }
   };
   const toggleRule = async (rule) => {
-    try { await api.updateAIRule(rule.id, { is_active: !rule.is_active }); loadAIRules(); } catch {}
+    try { await api.updateAIRule(rule.id, { is_active: !rule.is_active }); loadAIRules(); } catch (error) { console.error(error); }
   };
 
   const saveCategory = async (e) => {
     e.preventDefault();
-    try { 
+    try {
       if (editingCategory) {
         await api.updateCategory(editingCategory.id, newCat);
       } else {
-        await api.createCategory(newCat); 
+        await api.createCategory(newCat);
       }
-      setShowCatModal(false); 
-      setNewCat({ name: '', icon: '📦', type: 'expense', color: '#6366f1', subcategories: [] }); 
+      setShowCatModal(false);
+      setNewCat({ name: '', icon: '📦', type: 'expense', color: '#6366f1', subcategories: [] });
       setEditingCategory(null);
-      loadCategories(); 
+      loadCategories();
     } catch (err) { alert('Erro: ' + err.message); }
   };
 
@@ -186,10 +137,10 @@ export default function SettingsPage() {
        return;
     }
     setEditingCategory(cat);
-    setNewCat({ 
-      name: cat.name, 
-      icon: cat.icon || '📦', 
-      type: cat.type || 'expense', 
+    setNewCat({
+      name: cat.name,
+      icon: cat.icon || '📦',
+      type: cat.type || 'expense',
       color: cat.color || '#6366f1',
       group_name: cat.group_name || '',
       nature: cat.nature || 'variable',
@@ -201,18 +152,25 @@ export default function SettingsPage() {
   const createAccount = async (e) => {
     e.preventDefault();
     try {
-      await api.createAccount({ ...accountForm, balance: parseFloat(accountForm.balance || 0), credit_limit: accountForm.credit_limit ? parseFloat(accountForm.credit_limit) : null, closing_day: accountForm.closing_day ? parseInt(accountForm.closing_day) : null, due_day: accountForm.due_day ? parseInt(accountForm.due_day) : null });
+      const payload = { ...accountForm, workspace: accountForm.workspace || currentWorkspace, balance: Number(accountForm.balance), credit_limit: accountForm.credit_limit ? Number(accountForm.credit_limit) : null, closing_day: accountForm.closing_day ? Number(accountForm.closing_day) : null, due_day: accountForm.due_day ? Number(accountForm.due_day) : null };
+      if (editingAccount) await api.updateAccount(editingAccount.id, payload);
+      else await api.createAccount(payload);
       setShowAccountModal(false); loadAccounts();
     } catch (err) { alert('Erro: ' + err.message); }
   };
-  const deleteAccount = async (id) => { if (confirm('Excluir esta conta?')) { try { await api.deleteAccount(id); loadAccounts(); } catch {} } };
+  const deleteAccount = async (id) => { if (confirm('Arquivar esta conta? O histórico financeiro será preservado.')) { try { await api.deleteAccount(id); loadAccounts(); } catch (error) { console.error(error); } } };
 
-  const allEntities = [...familyData.families, ...familyData.businesses];
+  const openAccount = (account = null) => {
+    setEditingAccount(account);
+    setAccountForm(account ? { name: account.name, type: account.type, account_type: account.account_type, institution: account.institution || '', balance: account.opening_balance == null ? '' : String(account.opening_balance), balance_date: account.balance_date || '', credit_limit: account.credit_limit ?? '', closing_day: account.closing_day ?? '', due_day: account.due_day ?? '', color: account.color || '#d4a843', icon: account.icon || '🏦', workspace: account.workspace_id } : { name: '', type: 'checking', account_type: 'personal', institution: '', balance: '', balance_date: localToday(), credit_limit: '', closing_day: '', due_day: '', color: '#d4a843', icon: '🏦', workspace: currentWorkspace === 'all' ? '' : currentWorkspace });
+    setShowAccountModal(true);
+  };
+
 
   const TABS = [
     { key: 'profile', label: '👤 Perfil' },
     { key: 'preferences', label: '⚙️ Contas e Categorias' },
-    ...(!isGrantedMember ? [{ key: 'subscription', label: '💳 Assinatura' }] : []),
+    { key: 'subscription', label: '💳 Assinatura' },
     { key: 'family', label: '👥 Família & Empresa' },
     { key: 'ai', label: '🤖 IA' },
     { key: 'integrations', label: '🔌 Integrações' },
@@ -226,6 +184,8 @@ export default function SettingsPage() {
         {TABS.map(t => <button key={t.key} className={`tab ${activeTab === t.key ? 'active' : ''}`} onClick={() => setActiveTab(t.key)}>{t.label}</button>)}
       </div>
 
+      {errorKey && <DataError error={loadState[errorKey].error} onRetry={retryTab} />}
+      {!tabReady && !errorKey && <p role="status">Carregando dados desta seção…</p>}
       {/* PROFILE TAB */}
       {activeTab === 'profile' && (
         <div className="card" style={{ maxWidth: 650 }}>
@@ -237,17 +197,18 @@ export default function SettingsPage() {
           <div className="form-row"><div className="form-group"><label>Número</label><input value={profileForm.street_number} onChange={e => setProfileForm({ ...profileForm, street_number: e.target.value })} /></div><div className="form-group"><label>Complemento</label><input value={profileForm.complement} onChange={e => setProfileForm({ ...profileForm, complement: e.target.value })} /></div></div>
           <div className="form-row"><div className="form-group"><label>Bairro</label><input value={profileForm.neighborhood} onChange={e => setProfileForm({ ...profileForm, neighborhood: e.target.value })} /></div><div className="form-group"><label>Cidade / UF</label><div style={{ display: 'flex', gap: '0.5rem' }}><input value={profileForm.city} onChange={e => setProfileForm({ ...profileForm, city: e.target.value })} style={{ flex: 1 }} /><input value={profileForm.state} onChange={e => setProfileForm({ ...profileForm, state: e.target.value })} style={{ width: 60 }} placeholder="UF" /></div></div></div>
           <button className="btn btn-primary" style={{ marginTop: '1rem' }} onClick={saveProfile} disabled={saving}><Save size={16} /> {saving ? 'Salvando...' : 'Salvar'}</button>
+          <section style={{ marginTop: '2rem' }}><h3>Seus dados e privacidade</h3><p>Exportação respeita o contexto selecionado. Pedidos de acesso, correção ou exclusão ficam registrados para atendimento.</p><div className="page-header-actions"><button className="btn btn-secondary" disabled={saving} onClick={exportData}>Exportar meus dados</button><button className="btn btn-secondary" disabled={saving} onClick={() => privacyRequest('correction')}>Solicitar correção</button><button className="btn btn-secondary" disabled={saving} onClick={() => privacyRequest('deletion')}>Solicitar exclusão</button></div>{privacyNotice && <p role="status">{privacyNotice}</p>}<a href="/privacidade">Política de privacidade em revisão</a></section>
         </div>
       )}
 
       {/* PREFERENCES TAB - Accounts & Categories */}
-      {activeTab === 'preferences' && (
+      {activeTab === 'preferences' && tabReady && (
         <div>
           {/* Accounts */}
           <div className="card" style={{ marginBottom: '1.5rem' }}>
             <div className="card-header">
               <h3 className="card-title">🏦 Minhas Contas</h3>
-              <button className="btn btn-primary btn-sm" onClick={() => setShowAccountModal(true)}><Plus size={14} /> Nova Conta</button>
+              <button className="btn btn-primary btn-sm" onClick={() => openAccount()}><Plus size={14} /> Nova Conta</button>
             </div>
             {accounts.length === 0 ? <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Nenhuma conta cadastrada</p> : (
               <div className="grid grid-3">
@@ -259,9 +220,9 @@ export default function SettingsPage() {
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{acc.institution} • {acc.type === 'credit_card' ? 'Cartão' : acc.type === 'checking' ? 'Conta Corrente' : acc.type}</div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{acc.type === 'credit_card' ? `Limite: ${formatCurrency(acc.credit_limit)}` : formatCurrency(acc.balance)}</div>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{formatCurrency(acc.balance)}</div>
                     </div>
-                    <button className="btn-icon" onClick={() => deleteAccount(acc.id)}><Trash2 size={14} /></button>
+                    <button className="btn-icon" aria-label={`Editar conta ${acc.name}`} onClick={() => openAccount(acc)}><Edit3 size={14} /></button><button className="btn btn-secondary btn-sm" onClick={() => setReconcilingAccount(acc)}>Conferir saldo</button><button className="btn-icon" aria-label={`Arquivar conta ${acc.name}`} onClick={() => deleteAccount(acc.id)}><Trash2 size={14} /></button>
                   </div>
                 ))}
               </div>
@@ -289,8 +250,8 @@ export default function SettingsPage() {
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '1rem' }}>
                     {cats.map(cat => (
-                      <div 
-                        key={cat.id} 
+                      <div
+                        key={cat.id}
                         style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem', borderRadius: 'var(--border-radius-lg)', background: 'var(--bg-secondary)', borderLeft: `4px solid ${cat.color || 'var(--border-color)'}`, position: 'relative' }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -326,15 +287,18 @@ export default function SettingsPage() {
           {showAccountModal && (
             <div className="modal-overlay" onClick={() => setShowAccountModal(false)}>
               <div className="modal" onClick={e => e.stopPropagation()}>
-                <div className="modal-header"><h2>🏦 Nova Conta</h2><button onClick={() => setShowAccountModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button></div>
+                <div className="modal-header"><h2>{editingAccount ? "Editar saldo-base e conta" : "Nova conta"}</h2><button onClick={() => setShowAccountModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button></div>
                 <form onSubmit={createAccount}>
                   <div className="modal-body">
                     <div className="form-row"><div className="form-group"><label>Nome *</label><input value={accountForm.name} onChange={e => setAccountForm({ ...accountForm, name: e.target.value })} placeholder="Nubank, Itaú..." required /></div><div className="form-group"><label>Instituição</label><input value={accountForm.institution} onChange={e => setAccountForm({ ...accountForm, institution: e.target.value })} placeholder="Nubank" /></div></div>
                     <div className="form-row">
                       <div className="form-group"><label>Tipo</label><select value={accountForm.type} onChange={e => setAccountForm({ ...accountForm, type: e.target.value })}><option value="checking">Conta Corrente</option><option value="savings">Poupança</option><option value="credit_card">Cartão de Crédito</option><option value="investment">Investimento</option><option value="wallet">Carteira</option></select></div>
-                      <div className="form-group"><label>Titularidade</label><select value={accountForm.account_type} onChange={e => setAccountForm({ ...accountForm, account_type: e.target.value })}><option value="personal">Pessoal (Usuário)</option><option value="business">Empresarial (PJ/Empresa)</option></select></div>
-                      <div className="form-group"><label>{accountForm.type === 'credit_card' ? 'Limite' : 'Saldo Atual'} (R$)</label><input type="number" step="0.01" value={accountForm.type === 'credit_card' ? accountForm.credit_limit : accountForm.balance} onChange={e => setAccountForm({ ...accountForm, [accountForm.type === 'credit_card' ? 'credit_limit' : 'balance']: e.target.value })} /></div>
+                      <div className="form-group"><label>Titularidade (determinada pelo contexto)</label><select disabled value={accountForm.account_type} onChange={e => setAccountForm({ ...accountForm, account_type: e.target.value })}><option value="personal">Pessoal (Usuário)</option><option value="business">Empresarial (PJ/Empresa)</option></select></div>
+                      <div className="form-group"><label>{accountForm.type === 'credit_card' ? 'Limite' : 'Saldo de fechamento na data-base'} (R$)</label><input required type="number" step="0.01" value={accountForm.type === 'credit_card' ? accountForm.credit_limit : accountForm.balance} onChange={e => setAccountForm({ ...accountForm, [accountForm.type === 'credit_card' ? 'credit_limit' : 'balance']: e.target.value })} /></div>
                     </div>
+                    <label>Contexto da conta<select required disabled={Boolean(editingAccount)} value={accountForm.workspace || (currentWorkspace !== 'all' ? currentWorkspace : '')} onChange={e => setAccountForm({ ...accountForm, workspace: e.target.value })}><option value="">Selecione o titular/contexto</option>{workspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label>
+                    <label>Data-base do saldo<input type="date" required value={accountForm.balance_date} onChange={e => setAccountForm({ ...accountForm, balance_date: e.target.value })} /></label><p>Saldo de fechamento nesse dia. Somente movimentos posteriores serão somados. Para cartão, informe a dívida como saldo negativo.</p>
+                    {accountForm.type === 'credit_card' && <label>Saldo da fatura / dívida (R$)<input required type="number" step="0.01" value={accountForm.balance} onChange={e => setAccountForm({ ...accountForm, balance: e.target.value })} /></label>}
                     {accountForm.type === 'credit_card' && (
                       <div className="form-row"><div className="form-group"><label>Dia de Fechamento</label><input type="number" min="1" max="31" value={accountForm.closing_day} onChange={e => setAccountForm({ ...accountForm, closing_day: e.target.value })} /></div><div className="form-group"><label>Dia de Vencimento</label><input type="number" min="1" max="31" value={accountForm.due_day} onChange={e => setAccountForm({ ...accountForm, due_day: e.target.value })} /></div></div>
                     )}
@@ -360,9 +324,9 @@ export default function SettingsPage() {
                     <div className="form-group">
                       <label>Subcategorias</label>
                       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                        <input 
+                        <input
                           id="new-subcat-input"
-                          placeholder="Digite e aperte Enter..." 
+                          placeholder="Digite e aperte Enter..."
                           onKeyDown={e => {
                             if (e.key === 'Enter') {
                               e.preventDefault();
@@ -426,198 +390,20 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* SUBSCRIPTION TAB */}
-      {activeTab === 'subscription' && (
-        <div className="card" style={{ maxWidth: 650 }}>
-          <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-            <span className="badge badge-success" style={{ fontSize: '1rem', padding: '0.5rem 1.25rem' }}>💎 {profile?.plan === 'family' ? 'Plano Família' : profile?.plan === 'individual' ? 'Plano Individual' : 'Plano Gratuito'}</span>
-            <div style={{ marginTop: '0.5rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>Status: {profile?.plan_status === 'granted' ? '🎁 Acesso Concedido' : profile?.plan_status === 'active' ? '✅ Ativo' : profile?.plan_status === 'trial' ? '⏰ Trial' : 'Inativo'}</div>
-          </div>
-          <div className="grid grid-2" style={{ gap: '1rem' }}>
-            {[
-              { id: 'free', name: 'Gratuito', price: 'R$ 0', features: ['1 conta', 'Até 50 transações/mês', 'Categorias básicas'] },
-              { id: 'individual', name: 'Individual', price: 'R$ 19,90/mês', features: ['Contas ilimitadas', 'Transações ilimitadas', 'IA completa', 'Importação de extratos'] },
-              { id: 'family', name: 'Família', price: 'R$ 39,90/mês', features: ['Tudo do Individual', 'Até 5 membros da família', 'Múltiplos Workspaces'] },
-            ].map(plan => (
-              <div key={plan.name} style={{ padding: '1.5rem', background: 'var(--bg-secondary)', borderRadius: 'var(--border-radius-md)', border: '1px solid var(--border-color)', textAlign: 'center' }}>
-                <div style={{ fontWeight: 700, fontSize: '1.125rem', marginBottom: '0.25rem' }}>{plan.name}</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--accent-gold)', marginBottom: '1rem' }}>{plan.price}</div>
-                {plan.features.map((f, i) => <div key={i} style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>✅ {f}</div>)}
-                {profile?.plan !== plan.id && plan.id !== 'free' && (
-                  <button className="btn btn-primary" style={{ marginTop: '1rem', width: '100%' }} onClick={() => window.location.href = `/checkout?plan=${plan.id}`}>Assinar {plan.name}</button>
-                )}
-                {profile?.plan === plan.id && (
-                  <button className="btn btn-secondary" style={{ marginTop: '1rem', width: '100%' }} disabled>Plano Atual</button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {activeTab === 'subscription' && <SubscriptionSettings />}
+      {reconcilingAccount && <AccountReconciliation account={reconcilingAccount} onClose={() => setReconcilingAccount(null)} onSaved={loadAccounts} />}
 
-      {/* FAMILY / SPACES TAB */}
-      {activeTab === 'family' && (
-        <div style={{ maxWidth: 750 }}>
-          {/* Current User Card */}
-          <div className="card" style={{ marginBottom: '1.5rem' }}>
-            <div style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--accent-gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: 'var(--text-dark)' }}>{(profile?.full_name || 'U')[0]}</div>
-              <div><div style={{ fontWeight: 600 }}>{profile?.full_name || 'Você'}</div><div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{user?.email} • {isGrantedMember ? 'Membro Convidado' : 'Admin / Dono'}</div></div>
-              <span className={`badge ${isGrantedMember ? 'badge-info' : 'badge-success'}`} style={{ marginLeft: 'auto' }}>{isGrantedMember ? '👤 Membro' : '👑 Owner'}</span>
-            </div>
-          </div>
-
-          {/* ---- FAMILY ENTITIES ---- */}
-          {familyData.families.map(fam => (
-            <div key={fam.id} className="card" style={{ marginBottom: '1.5rem' }}>
-              <div className="card-header">
-                <h3 className="card-title"><Users size={18} /> {fam.name || 'Minha Família'}</h3>
-                {!isGrantedMember && <button className="btn btn-primary btn-sm" onClick={() => { setFamilyForm({ ...familyForm, entity_id: fam.id }); setShowFamilyModal(true); }}><Plus size={14} /> Novo Membro</button>}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {(fam.members || []).map((member, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-sm)' }}>
-                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: member.role === 'owner' ? 'var(--accent-gold)' : 'var(--bg-modifier-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, color: member.role === 'owner' ? 'var(--text-dark)' : 'inherit' }}>{(member.name || 'U')[0]}</div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{member.name}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{member.email}</div>
-                    </div>
-                    <span className={`badge ${member.role === 'owner' ? 'badge-success' : 'badge-info'}`}>{member.role === 'owner' ? '👑 Owner' : 'member'}</span>
-                  </div>
-                ))}
-                {(!fam.members || fam.members.length === 0) && <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '1rem' }}>Nenhum membro vinculado.</p>}
-              </div>
-            </div>
-          ))}
-
-          {/* No family yet — prompt */}
-          {familyData.families.length === 0 && !isGrantedMember && (
-            <div className="card" style={{ marginBottom: '1.5rem', textAlign: 'center', padding: '2rem' }}>
-              <Users size={32} style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }} />
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>Nenhuma família criada ainda.<br/>Convide familiares para compartilhar a gestão financeira.</p>
-              <button className="btn btn-primary" onClick={() => { setFamilyForm({ ...familyForm, entity_id: '' }); setShowFamilyModal(true); }}><Plus size={16} /> Adicionar Primeiro Membro</button>
-            </div>
-          )}
-
-          {/* ---- BUSINESS ENTITIES ---- */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', marginTop: '1rem' }}>
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Building2 size={20} /> Minhas Empresas</h3>
-            {!isGrantedMember && <button className="btn btn-primary btn-sm" onClick={() => setShowEntityModal(true)}><Plus size={14} /> Nova Empresa</button>}
-          </div>
-
-          {familyData.businesses.map(biz => (
-            <div key={biz.id} className="card" style={{ marginBottom: '1rem' }}>
-              <div className="card-header">
-                <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Building2 size={16} color="var(--accent-gold)" /> {biz.name}</h3>
-                {!isGrantedMember && <button className="btn btn-secondary btn-sm" onClick={() => { setFamilyForm({ ...familyForm, entity_id: biz.id }); setShowFamilyModal(true); }}><Plus size={14} /> Membro</button>}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {(biz.members || []).map((member, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-sm)' }}>
-                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--bg-modifier-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>{(member.name || 'U')[0]}</div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{member.name}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{member.email}</div>
-                    </div>
-                    <span className={`badge ${member.role === 'owner' ? 'badge-success' : 'badge-info'}`}>{member.role}</span>
-                  </div>
-                ))}
-                {(!biz.members || biz.members.length === 0) && <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '0.75rem' }}>Nenhum membro.</p>}
-              </div>
-            </div>
-          ))}
-
-          {familyData.businesses.length === 0 && !isGrantedMember && (
-            <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
-              <Building2 size={32} style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }} />
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>Nenhuma empresa cadastrada.<br/>Cadastre sua empresa para separar finanças pessoais e empresariais.</p>
-              <button className="btn btn-primary" onClick={() => setShowEntityModal(true)}><Plus size={16} /> Cadastrar Empresa</button>
-            </div>
-          )}
-
-          {/* ---- MODALS ---- */}
-          {/* Add Member Modal */}
-          {showFamilyModal && (
-            <div className="modal-overlay" onClick={() => setShowFamilyModal(false)}>
-              <div className="modal" onClick={e => e.stopPropagation()}>
-                <div className="modal-header"><h2>👥 Novo Membro</h2><button onClick={() => setShowFamilyModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button></div>
-                <form onSubmit={createFamilyMember}>
-                  <div className="modal-body">
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>Crie as credenciais de acesso para a pessoa que poderá acessar e lançar movimentações.</p>
-                    {allEntities.length > 1 && (
-                      <div className="form-group">
-                        <label>Adicionar em qual espaço? *</label>
-                        <select value={familyForm.entity_id} onChange={e => setFamilyForm({ ...familyForm, entity_id: e.target.value })}>
-                          <option value="">Família (padrão)</option>
-                          {allEntities.map(ent => (
-                            <option key={ent.id} value={ent.id}>{ent.type === 'business' ? `🏢 ${ent.name}` : `👥 ${ent.name}`}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                    <div className="form-group"><label>Nome Completo *</label><input value={familyForm.name} onChange={e => setFamilyForm({ ...familyForm, name: e.target.value })} required /></div>
-                    <div className="form-group"><label>E-mail de Login *</label><input type="email" value={familyForm.email} onChange={e => setFamilyForm({ ...familyForm, email: e.target.value })} required /></div>
-                    <div className="form-row">
-                      <div className="form-group"><label>Senha Provisória *</label><input type="text" value={familyForm.password} onChange={e => setFamilyForm({ ...familyForm, password: e.target.value })} placeholder="Crie uma senha forte" required minLength={6} /></div>
-                      <div className="form-group"><label>Permissão</label><select value={familyForm.role} onChange={e => setFamilyForm({ ...familyForm, role: e.target.value })}><option value="member">Membro (Colaborador)</option><option value="owner">Co-Administrador</option></select></div>
-                    </div>
-                  </div>
-                  <div className="modal-footer"><button type="button" className="btn btn-secondary" onClick={() => setShowFamilyModal(false)}>Cancelar</button><button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Criando...' : 'Criar Acesso'}</button></div>
-                </form>
-              </div>
-            </div>
-          )}
-
-          {/* Create Entity/Business Modal */}
-          {showEntityModal && (
-            <div className="modal-overlay" onClick={() => setShowEntityModal(false)}>
-              <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
-                <div className="modal-header"><h2>🏢 Nova Empresa</h2><button onClick={() => setShowEntityModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button></div>
-                <form onSubmit={createEntity}>
-                  <div className="modal-body">
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>Cadastre uma empresa para separar as finanças PJ das pessoais. Você poderá importar extratos em nome dela e convidar colaboradores.</p>
-                    <div className="form-group"><label>Nome da Empresa *</label><input value={entityForm.name} onChange={e => setEntityForm({ ...entityForm, name: e.target.value })} placeholder="Ex: Ateliê, Consultoria ABC..." required /></div>
-                    
-                    {familyData.members.length > 0 && (
-                      <div className="form-group" style={{ marginTop: '1rem' }}>
-                        <label style={{ marginBottom: '0.5rem', display: 'block' }}>Compartilhar acesso com:</label>
-                        <div style={{ display: 'grid', gap: '0.5rem', background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 8 }}>
-                          {familyData.members.map(m => (
-                            <label key={m.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
-                              <input 
-                                type="checkbox" 
-                                checked={(entityForm.members || []).includes(m.id)}
-                                onChange={(e) => {
-                                  let newMembers = [...(entityForm.members || [])];
-                                  if (e.target.checked) newMembers.push(m.id);
-                                  else newMembers = newMembers.filter(id => id !== m.id);
-                                  setEntityForm({ ...entityForm, members: newMembers });
-                                }}
-                              />
-                              {m.name || m.email} <span style={{ color: 'var(--text-muted)' }}>— {m.role}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="modal-footer"><button type="button" className="btn btn-secondary" onClick={() => setShowEntityModal(false)}>Cancelar</button><button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Criando...' : 'Cadastrar Empresa'}</button></div>
-                </form>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {activeTab === 'family' && <WorkspaceManagement />}
 
       {/* AI TAB */}
-      {activeTab === 'ai' && (
+      {activeTab === 'ai' && tabReady && (
         <div>
           <div className="card" style={{ marginBottom: '1.5rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div><h3 style={{ fontWeight: 600 }}>💬 Lume no WhatsApp</h3><p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Envie comprovantes, áudios ou texto para lançar transações</p></div>
-              <button className="btn btn-primary" onClick={() => alert('Integração com WhatsApp será liberada na próxima fase de expansão!')}>🟢 Conectar WhatsApp</button>
+              <div><h3 style={{ fontWeight: 600 }}>💬 Lume no WhatsApp</h3><p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Integração ainda não habilitada. Use importação e revisão de extratos.</p></div>
+              <button className="btn btn-primary" disabled title="Recurso ainda indisponível">WhatsApp indisponível</button>
             </div>
-            <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: 'var(--border-radius-sm)', fontSize: '0.85rem' }}>💡 Exemplos: "Lança R$50 de almoço" • "Quanto gastei em transporte?" • Envie foto de comprovante</div>
+
           </div>
 
           <div className="card">
@@ -645,50 +431,9 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* INTEGRATIONS TAB */}
-      {activeTab === 'integrations' && (
-        <div className="card" style={{ maxWidth: 650 }}>
-          <div className="card-header"><h3 className="card-title"><Calendar size={18} /> Google Calendar</h3></div>
-          <div style={{ padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--border-radius-sm)', display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-            <div style={{ width: 40, height: 40, borderRadius: '50%', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <svg width="24" height="24" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
-            </div>
-            <div>
-              <div style={{ fontWeight: 600 }}>Sincronização de Contas Fixas</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Adiciona lembretes na sua agenda do Google para os vencimentos e recebimentos do mês.</div>
-            </div>
-            <button className="btn btn-secondary" style={{ marginLeft: 'auto' }} onClick={() => alert('Configurações de sincronização avançada chegam em breve!')}>⚙️ Configurar</button>
-          </div>
-          <div style={{ textAlign: 'center', padding: '1rem' }}>
-            <button 
-              className="btn btn-primary" 
-              disabled={syncingCalendar}
-              onClick={async () => {
-                setSyncingCalendar(true);
-                try {
-                  const targetDate = new Date();
-                  targetDate.setDate(targetDate.getDate() + 2); // Event 2 days from now
-                  
-                  await calendarService.createEvent({
-                    summary: 'Lembrete Lume: Pagar Fatura',
-                    description: 'Gerado automaticamente pelo Lume. Acesse: https://lumefin.com.br',
-                    start: { dateTime: targetDate.toISOString() },
-                    end: { dateTime: new Date(targetDate.getTime() + 60*60*1000).toISOString() }
-                  });
-                  alert('Sincronizado! Verifique seu Google Calendar.');
-                } catch (err) {
-                  alert('Erro ao sincronizar: ' + err.message);
-                }
-                setSyncingCalendar(false);
-              }}
-            >
-              {syncingCalendar ? 'Sincronizando...' : 'Testar Sincronização Agora'}
-            </button>
-          </div>
-        </div>
-      )}
+      {activeTab === 'integrations' && <div className="card"><h2>Integrações externas</h2><p>Google Calendar, WhatsApp e novas conexões Open Finance ainda não estão habilitados neste piloto. Não há sincronização automática nem envio de lembretes por esses canais.</p><p>Use importação de extratos, conferência dos movimentos e agenda de contas fixas dentro do Lume.</p></div>}
 
-      {activeTab === 'audit' && (
+      {activeTab === 'audit' && tabReady && (
         <div className="card">
           <div className="card-header"><h3 className="card-title">📋 Registro de Atividade</h3></div>
           {auditLogs.length === 0 ? (

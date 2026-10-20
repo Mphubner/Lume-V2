@@ -1,7 +1,8 @@
+import DataError from '../../components/ui/DataError';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import StatCard from '../../components/ui/StatCard';
-import { formatCurrency, formatDate } from '../../utils/format';
+import { formatCurrency } from '../../utils/format';
 import { Plus, Edit3, Trash2, TrendingDown, CheckCircle } from 'lucide-react';
 
 const DEBT_TYPES = { personal_loan: 'Empréstimo Pessoal', financing: 'Financiamento', credit_card_debt: 'Dívida Cartão', overdraft: 'Cheque Especial', other: 'Outro' };
@@ -10,7 +11,8 @@ const DEBT_ICONS = { personal_loan: '💰', financing: '🏠', credit_card_debt:
 export default function DebtsPage() {
   const [debts, setDebts] = useState([]);
   const [debtStats, setDebtStats] = useState({ totalOwed: 0, totalPaid: 0, monthlyPayment: 0, activeCount: 0, paidCount: 0 });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [editingDebt, setEditingDebt] = useState(null);
   const [showPayment, setShowPayment] = useState(null);
@@ -22,19 +24,12 @@ export default function DebtsPage() {
   useEffect(() => { loadDebts(); }, []);
 
   const loadDebts = async () => {
-    setLoading(true);
+    setLoading(true); setError(null);
     try {
       const result = await api.getDebts();
       setDebts(result.debts || []);
-      setDebtStats(result.stats || debtStats);
-    } catch {
-      setDebts([
-        { id: '1', name: 'Financiamento Carro', type: 'financing', creditor: 'Banco Itaú', original_amount: 45000, current_balance: 32000, interest_rate: 1.2, total_installments: 48, installment_amount: 1250, due_day: 15, status: 'active', start_date: '2024-06-01' },
-        { id: '2', name: 'Empréstimo Pessoal', type: 'personal_loan', creditor: 'Nubank', original_amount: 8000, current_balance: 3500, interest_rate: 2.5, total_installments: 12, installment_amount: 750, due_day: 10, status: 'active', start_date: '2025-08-15' },
-        { id: '3', name: 'Dívida Cartão Visa', type: 'credit_card_debt', creditor: 'Bradesco', original_amount: 3200, current_balance: 0, interest_rate: 12, total_installments: 0, installment_amount: 0, due_day: 5, status: 'paid', start_date: '2025-01-10' },
-      ]);
-      setDebtStats({ totalOwed: 35500, totalPaid: 3200, monthlyPayment: 2000, activeCount: 2, paidCount: 1 });
-    } finally { setLoading(false); }
+      if (result.stats) setDebtStats(result.stats);
+    } catch (err) { setError(err); } finally { setLoading(false); }
   };
 
   const openCreate = () => {
@@ -58,7 +53,7 @@ export default function DebtsPage() {
   };
   const handleDelete = async (id) => {
     if (!confirm('Excluir esta pendência?')) return;
-    try { await api.deleteDebt(id); loadDebts(); } catch {}
+    try { await api.deleteDebt(id); loadDebts(); } catch (error) { console.error(error); }
   };
   const handlePayment = async (debt) => {
     const val = parseFloat(paymentAmount);
@@ -73,7 +68,7 @@ export default function DebtsPage() {
   };
   const markAsPaid = async (debt) => {
     if (!confirm('Marcar como quitada?')) return;
-    try { await api.updateDebt(debt.id, { current_balance: 0, status: 'paid' }); loadDebts(); } catch {}
+    try { await api.updateDebt(debt.id, { current_balance: 0, status: 'paid' }); loadDebts(); } catch (error) { console.error(error); }
   };
 
   const getProgressPct = (debt) => {
@@ -84,8 +79,10 @@ export default function DebtsPage() {
   const activeDebts = debts.filter(d => d.status === 'active');
   const paidDebts = debts.filter(d => d.status === 'paid');
 
+  if (error) return <DataError error={error} onRetry={loadDebts} />;
   return (
     <div>
+      <p className="card" role="note">Controle manual de obrigações. Uma baixa aqui não comprova pagamento bancário; vincule e confira o lançamento na conta pagadora.</p>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
         <div className="page-header" style={{ marginBottom: 0 }}><h1>Minhas Pendências</h1><p>Acompanhe, pague e quite suas dívidas com estratégias inteligentes</p></div>
         <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Nova Pendência</button>

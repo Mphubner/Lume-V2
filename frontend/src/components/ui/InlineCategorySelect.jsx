@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import api from '../../services/api';
 
-export default function InlineCategorySelect({ 
-  value, 
-  onChange, 
-  categories = [], 
-  typeFilter = 'expense', 
-  onCategoryCreated 
+export default function InlineCategorySelect({
+  value,
+  onChange,
+  categories = [],
+  typeFilter = 'expense',
+  onCategoryCreated,
+  required = false,
+  ariaLabel = "Categoria"
 }) {
   const [isCreating, setIsCreating] = useState(false);
   const [newCat, setNewCat] = useState({ name: '', icon: '📦', color: '#6366f1', parent_id: '', nature: 'variable', group_name: '' });
@@ -19,7 +21,7 @@ export default function InlineCategorySelect({
     const val = e.target.value;
     if (val === 'CREATE_NEW') {
       setIsCreating(true);
-      setNewCat({ ...newCat, name: '', nature: 'variable', group_name: '' }); 
+      setNewCat({ ...newCat, name: '', nature: 'variable', group_name: '' });
     } else {
       onChange(val);
     }
@@ -39,12 +41,12 @@ export default function InlineCategorySelect({
         group_name: null
       };
       const created = await api.createCategory(payload);
-      
+
       // Notify parent to fetch categories
       if (onCategoryCreated) {
         onCategoryCreated(created);
       }
-      
+
       // Auto select the new category
       onChange(created.id);
       setIsCreating(false);
@@ -79,8 +81,8 @@ export default function InlineCategorySelect({
 
   return (
     <>
-      <select value={value || ''} onChange={handleSelectChange} style={{ background: 'var(--bg-input)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }} required>
-        <option value="" disabled style={{ color: 'var(--text-muted)' }}>Selecione uma categoria...</option>
+      <select aria-label={ariaLabel} value={value || ''} onChange={handleSelectChange} style={{ background: 'var(--bg-input)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }} required={required}>
+        <option value="" style={{ color: 'var(--text-muted)' }}>Sem categoria</option>
         {optionNodes}
         {/* The inline create option */}
         <option value="CREATE_NEW">➕ Criar Nova Categoria...</option>
@@ -92,9 +94,9 @@ export default function InlineCategorySelect({
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 400 }}>
             <div className="modal-header">
               <h3>✨ Nova Categoria</h3>
-              <button 
-                type="button" 
-                onClick={() => setIsCreating(false)} 
+              <button
+                type="button"
+                onClick={() => setIsCreating(false)}
                 style={{ background: 'transparent', color: 'var(--text-muted)' }}
                 disabled={loading}
               >
@@ -106,30 +108,30 @@ export default function InlineCategorySelect({
                 <div style={{ display: 'flex', gap: '0.75rem' }}>
                   <div className="form-group" style={{ flexShrink: 0, width: '4rem' }}>
                     <label>Ícone</label>
-                    <input 
-                      type="text" 
-                      value={newCat.icon} 
-                      onChange={e => setNewCat({ ...newCat, icon: e.target.value })} 
-                      maxLength={2} 
-                      required 
+                    <input
+                      type="text"
+                      value={newCat.icon}
+                      onChange={e => setNewCat({ ...newCat, icon: e.target.value })}
+                      maxLength={2}
+                      required
                       style={{ textAlign: 'center', fontSize: '1.25rem' }}
                     />
                   </div>
                   <div className="form-group" style={{ flex: 1 }}>
                     <label>Nome da Categoria</label>
-                    <input 
-                      type="text" 
-                      value={newCat.name} 
-                      onChange={e => setNewCat({ ...newCat, name: e.target.value })} 
-                      placeholder="Ex: Assinaturas" 
-                      required 
+                    <input
+                      type="text"
+                      value={newCat.name}
+                      onChange={e => setNewCat({ ...newCat, name: e.target.value })}
+                      placeholder="Ex: Assinaturas"
+                      required
                       autoFocus
                     />
                   </div>
                 </div>
 
 
-                
+
                 <div className="form-group">
                   <label>Cor de Identificação</label>
                   <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>

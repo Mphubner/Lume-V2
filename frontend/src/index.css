@@ -260,7 +260,7 @@ select {
   .mobile-navbar { display: flex; }
   .sidebar-overlay.active { display: block; opacity: 1; pointer-events: auto; }
   .sidebar-overlay { pointer-events: none; }
-  
+
   .main-content {
     margin-left: 0 !important;
     padding: calc(1.5rem + 64px) 1rem 1.5rem 1rem !important; /* Espaço pro mobile navbar não cobrir */
@@ -278,7 +278,7 @@ select {
     box-shadow: -10px 0 30px rgba(0,0,0,0.5);
     background: rgba(9, 9, 11, 0.98) !important;
   }
-  
+
   /* Oculta botao de colapso desktop */
   .desktop-collapse-btn { display: none !important; }
 }
@@ -1605,7 +1605,7 @@ select {
 }
 
 /* =============================================
-   PREMIUM UX/UI — Micro-animations, Hover 
+   PREMIUM UX/UI — Micro-animations, Hover
    Effects, Glassmorphism & Full Responsiveness
    ============================================= */
 
@@ -1968,3 +1968,12 @@ input:focus:not(:focus-visible) {
   .card { break-inside: avoid; border: 1px solid #ddd; }
   body { background: white; color: black; }
 }
+/* Financial review: keep actions and values visible at narrow widths. */
+.data-error { border: 1px solid var(--color-danger); margin-bottom: 1rem; }
+.source-row { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 28rem; max-height: 12rem; overflow: auto; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.workspace-selector-container select { width: 100%; max-width: 100%; }
+.table-responsive { width: 100%; overflow-x: auto; }
+.chatbot-panel { width: min(380px, calc(100vw - 2rem)); max-height: min(650px, calc(100dvh - 5rem)); }
+button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible, [role="button"]:focus-visible { outline: 3px solid var(--accent-gold); outline-offset: 3px; }
+@media (max-width: 600px) { .page-header-actions, .filter-bar { flex-wrap: wrap; } .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; } .main-content { min-width: 0; } .chatbot-panel { right: 1rem; } }

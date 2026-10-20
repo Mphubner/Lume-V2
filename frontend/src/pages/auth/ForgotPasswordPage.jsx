@@ -57,12 +57,12 @@ export default function ForgotPasswordPage() {
                   Sem problemas! Informe seu email e enviaremos um link para redefinir sua senha.
                 </p>
 
-                {error && <div className="auth-error">{error}</div>}
+                {error && <div className="auth-error" role="alert">{error}</div>}
 
                 <form onSubmit={handleSubmit} className="auth-form">
                   <div className="auth-field">
                     <Mail size={18} className="auth-field-icon" />
-                    <input type="email" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" autoFocus />
+                    <input type="email" aria-label="seu@email.com" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" autoFocus />
                   </div>
                   <button type="submit" className="auth-submit-btn" disabled={loading}>
                     {loading ? <span className="spinner" style={{ width: 20, height: 20 }} /> : <><span>Enviar link</span><ArrowRight size={18} /></>}
