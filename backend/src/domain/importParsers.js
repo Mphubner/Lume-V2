@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 export const PARSER_VERSION = 'lume-statements-2';
 export const MAX_IMPORT_ROWS = 20000;
+const MAX_CSV_PREAMBLE_ROWS = 4;
 
 export class ImportError extends Error {
   constructor(code, message, details = {}) {
@@ -93,9 +94,9 @@ export function tokenizeCSV(content, delimiter = ';') {
   let fields = [], field = '', quoted = false, closed = false, line = 1, startLine = 1;
   const pushRow = () => {
     fields.push(field);
-    if (fields.some(value => value.trim() !== '')) rows.push({ fields, line: startLine });
+    if (fields.length > 1 || closed || fields.some(value => value.trim() !== '')) rows.push({ fields, line: startLine });
     fields = []; field = ''; closed = false;
-    if (rows.length > MAX_IMPORT_ROWS + 1) fail('ROW_LIMIT', `O limite é ${MAX_IMPORT_ROWS} lançamentos por arquivo.`);
+    if (rows.length > MAX_IMPORT_ROWS + 1 + MAX_CSV_PREAMBLE_ROWS) fail('ROW_LIMIT', `O limite é ${MAX_IMPORT_ROWS} lançamentos por arquivo.`);
   };
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -129,7 +130,65 @@ const aliases = {
   debit: ['debito', 'debit', 'saida', 'saidas'], credit: ['credito', 'credit', 'entrada', 'entradas'],
   external_id: ['fitid', 'id', 'id transacao', 'id da transacao', 'transaction id'],
   currency: ['moeda', 'currency'],
+  balance: ['saldo', 'balance'],
 };
+
+const interHeader = ['data lancamento', 'historico', 'descricao', 'valor', 'saldo'];
+const isInterHeader = header => header.length === interHeader.length && interHeader.every(name => header.filter(value => value === name).length === 1);
+const matchesAlias = (key, name) => aliases[key].some(alias => normalized(alias) === name);
+const looksLikeCSVHeader = row => {
+  const names = row.fields.map(normalized);
+  return names.some(name => matchesAlias('date', name)) && names.some(name => matchesAlias('description', name)) &&
+    (names.some(name => matchesAlias('amount', name)) || (names.some(name => matchesAlias('debit', name)) && names.some(name => matchesAlias('credit', name))));
+};
+
+/** Only this explicit bank preamble may precede a header; arbitrary rows are never discarded. */
+function parseInterPreamble(rows) {
+  if (rows.length !== MAX_CSV_PREAMBLE_ROWS || rows[0].fields.length !== 1 || normalized(rows[0].fields[0]) !== 'extrato conta corrente') {
+    fail('CSV_PREAMBLE', 'Há conteúdo antes do cabeçalho que não pôde ser identificado com segurança.', { line: rows[0]?.line });
+  }
+  const values = {};
+  for (const row of rows.slice(1)) {
+    const key = normalized(row.fields[0]);
+    if (row.fields.length !== 2 || !['conta', 'periodo', 'saldo'].includes(key) || Object.hasOwn(values, key)) fail('CSV_PREAMBLE', 'Metadados do extrato incompletos ou ambíguos.', { line: row.line });
+    values[key] = row.fields[1].trim();
+  }
+  if (!values.conta || !/^[0-9][0-9 .-]{1,63}$/.test(values.conta)) fail('CSV_PREAMBLE', 'Referência da conta inválida no extrato.');
+  const period = values.periodo?.match(/^(\d{2}\/\d{2}\/\d{4})\s+a\s+(\d{2}\/\d{2}\/\d{4})$/i);
+  if (!period || values.saldo === undefined) fail('CSV_PREAMBLE', 'Período ou saldo ausente no extrato.');
+  const periodStart = parseStatementDate(period[1]), periodEnd = parseStatementDate(period[2]);
+  if (periodStart > periodEnd) fail('CSV_PREAMBLE', 'O início do período ocorre depois do fim.');
+  return {
+    account_reference: values.conta, period_start: periodStart, period_end: periodEnd,
+    closing_balance: centsToDecimal(parseAmountCents(values.saldo, { locale: 'pt-BR' })),
+    // "Saldo" does not explicitly declare its as-of date. Approval still needs confirmation.
+    balance_requires_confirmation: true,
+    preamble: rows.map(row => ({ line: row.line, fields: row.fields })),
+  };
+}
+
+function reconcileCSVBalances(transactions, declaredClosing) {
+  const candidate = order => {
+    const ordered = order === 'ascending' ? transactions : [...transactions].reverse();
+    for (let index = 1; index < ordered.length; index++) {
+      if (ordered[index].date < ordered[index - 1].date || BigInt(ordered[index].source.balance_cents) - BigInt(ordered[index - 1].source.balance_cents) !== BigInt(ordered[index].amount_cents)) return null;
+    }
+    const first = ordered[0], last = ordered.at(-1);
+    if (declaredClosing !== undefined && last.source.balance_cents !== parseAmountCents(declaredClosing)) return null;
+    return { order, opening: (BigInt(first.source.balance_cents) - BigInt(first.amount_cents)).toString(), closing: last.source.balance_cents };
+  };
+  const candidates = ['ascending', 'descending'].map(candidate).filter(Boolean);
+  if (!candidates.length) fail('CSV_BALANCE_MISMATCH', 'Os saldos por lançamento não conferem com os valores e a ordem do extrato. Confira o arquivo original.');
+  const sameOpening = candidates.every(value => value.opening === candidates[0].opening);
+  const sameClosing = candidates.every(value => value.closing === candidates[0].closing);
+  return {
+    status: 'matched', order: transactions.length === 1 ? 'single' : candidates.length === 1 ? candidates[0].order : 'ambiguous',
+    rows_with_balances: transactions.length, checked_intervals: transactions.length - 1,
+    ...(sameOpening ? { opening_balance_inferred: centsToDecimal(candidates[0].opening) } : {}),
+    ...(sameClosing ? { closing_balance_observed: centsToDecimal(candidates[0].closing) } : {}),
+    sum_cents: transactions.reduce((sum, row) => sum + BigInt(row.amount_cents), 0n).toString(),
+  };
+}
 
 function makeRow({ date, description, cents, externalId, source }) {
   const desc = String(description || '').trim();
@@ -149,27 +208,45 @@ export function parseCSV(content, options = {}) {
   let rows, delimiter = options.delimiter;
   if (delimiter && ![';', ',', '\t'].includes(delimiter)) fail('CSV_DELIMITER', 'Separador CSV inválido.');
   if (!delimiter) {
-    const candidates = [';', ',', '\t'].flatMap(candidate => {
-      try { const parsed = tokenizeCSV(content, candidate); return parsed[0]?.fields.length >= 3 ? [{ delimiter: candidate, rows: parsed }] : []; }
+    const parsedCandidates = [';', ',', '\t'].flatMap(candidate => {
+      try { const parsed = tokenizeCSV(content, candidate); return [{ delimiter: candidate, rows: parsed, recognizedHeader: parsed.some(looksLikeCSVHeader) }]; }
       catch { return []; }
     });
-    if (candidates.length !== 1) fail('CSV_DELIMITER', 'Separador CSV não identificado sem ambiguidade. Informe delimiter.');
+    const recognized = parsedCandidates.filter(candidate => candidate.recognizedHeader);
+    const candidates = recognized.length ? recognized : parsedCandidates.filter(candidate => candidate.rows[0]?.fields.length >= 3);
+    if (candidates.length !== 1) fail('CSV_DELIMITER', 'Separador CSV não identificado sem ambiguidade. Escolha o separador em Formato e colunas do CSV.');
     ({ delimiter, rows } = candidates[0]);
   }
   rows ||= tokenizeCSV(content, delimiter);
   if (rows.length < 2) fail('EMPTY_STATEMENT', 'O extrato não possui lançamentos.');
-  const header = rows[0].fields.map(normalized);
+  const recognizedIndex = rows.findIndex(looksLikeCSVHeader);
+  // Explicit column mappings retain their first-row contract; automatic detection never skips arbitrary content.
+  const headerIndex = options.columns && !isInterHeader(rows[recognizedIndex]?.fields.map(normalized) || []) ? 0 : Math.max(recognizedIndex, 0);
+  const header = rows[headerIndex].fields.map(normalized);
+  if (header.some(name => !name) || new Set(header).size !== header.length) fail('CSV_COLUMNS', 'O cabeçalho contém colunas vazias ou duplicadas.', { line: rows[headerIndex].line });
+  const inter = isInterHeader(header);
+  const preamble = headerIndex ? (inter ? parseInterPreamble(rows.slice(0, headerIndex)) : fail('CSV_PREAMBLE', 'Há conteúdo não reconhecido antes do cabeçalho.', { line: rows[0].line })) : {};
+  if (options.columns && (typeof options.columns !== 'object' || Array.isArray(options.columns) || Object.keys(options.columns).some(key => !Object.hasOwn(aliases, key)))) fail('CSV_COLUMNS', 'Mapeamento de colunas inválido.');
   const columns = {};
   for (const [key, names] of Object.entries(aliases)) {
     const requested = options.columns?.[key];
-    const matches = header.flatMap((name, index) => (requested !== undefined ? (Number.isInteger(requested) ? requested === index : normalized(requested) === name) : names.map(normalized).includes(name)) ? [index] : []);
+    if (requested !== undefined && !(typeof requested === 'string' && requested.trim() || Number.isInteger(requested) && requested >= 0 && requested < header.length)) fail('CSV_COLUMNS', `Mapeamento da coluna ${key} inválido.`);
+    const matches = header.flatMap((name, index) => (requested !== undefined ? (Number.isInteger(requested) ? requested === index : normalized(requested) === name) : key === 'description' && inter ? name === 'descricao' : names.map(normalized).includes(name)) ? [index] : []);
     if (matches.length > 1) fail('CSV_COLUMNS', `Coluna ${key} ambígua.`);
+    if (requested !== undefined && matches.length !== 1) fail('CSV_COLUMNS', `Coluna ${key} não encontrada no cabeçalho.`);
     columns[key] = matches[0];
   }
   if (columns.date === undefined || columns.description === undefined || (columns.amount === undefined && (columns.debit === undefined || columns.credit === undefined))) fail('CSV_COLUMNS', 'CSV precisa de Data, Descrição e Valor (ou Débito e Crédito). Mapeie as colunas explicitamente.');
-  const transactions = rows.slice(1).map(row => {
+  const assigned = Object.values(columns).filter(index => index !== undefined);
+  if (new Set(assigned).size !== assigned.length || (columns.amount !== undefined && (columns.debit !== undefined || columns.credit !== undefined))) fail('CSV_COLUMNS', 'O mapeamento sobrepõe colunas ou mistura Valor com Débito/Crédito.');
+  if (inter && options.columns?.description === undefined) columns.history = header.indexOf('historico');
+  const dataRows = rows.slice(headerIndex + 1);
+  if (!dataRows.length) fail('EMPTY_STATEMENT', 'O extrato não possui lançamentos.');
+  if (dataRows.length > MAX_IMPORT_ROWS) fail('ROW_LIMIT', `O limite é ${MAX_IMPORT_ROWS} lançamentos por arquivo.`);
+  const transactions = dataRows.map(row => {
     try {
       if (row.fields.length !== header.length) fail('CSV_COLUMNS', 'Quantidade de colunas difere do cabeçalho.');
+      if (row.fields.every((value, index) => normalized(value) === header[index])) fail('CSV_REPEATED_HEADER', 'O cabeçalho foi repetido entre os lançamentos. Exporte um único extrato por arquivo.');
       const get = key => columns[key] === undefined ? '' : row.fields[columns[key]].trim();
       if (get('currency') && get('currency').toUpperCase() !== 'BRL') fail('UNSUPPORTED_CURRENCY', 'Somente BRL é suportado.');
       let cents;
@@ -184,15 +261,20 @@ export function parseCSV(content, options = {}) {
       const provenanceIndex = header.indexOf('lume_source_identity');
       const provenance = provenanceIndex >= 0 ? row.fields[provenanceIndex].trim() : '';
       if (provenance && !/^[a-f0-9]{64}$/.test(provenance)) fail('INVALID_PROVENANCE', 'Identidade de origem da conversão inválida.');
-      const description = header.includes('lume_conversion') && get('description').startsWith("'csv:") ? get('description').slice(5) : get('description');
-      const parsed = makeRow({ date: parseStatementDate(get('date')), description, cents, externalId: provenanceIndex >= 0 ? null : get('external_id'), source: { line: row.line, fields: row.fields, converted_source_identity: provenance || undefined, raw_amount: columns.amount !== undefined ? get('amount') : { debit: get('debit'), credit: get('credit') } } });
+      const rawDescription = header.includes('lume_conversion') && get('description').startsWith("'csv:") ? get('description').slice(5) : get('description');
+      const description = columns.history !== undefined ? [get('history'), rawDescription].filter(Boolean).join(' - ') : rawDescription;
+      const date = parseStatementDate(get('date'));
+      if (preamble.period_start && (date < preamble.period_start || date > preamble.period_end)) fail('CSV_PERIOD_MISMATCH', 'A data do lançamento está fora do período declarado no extrato.');
+      if (inter && !get('balance')) fail('CSV_BALANCE_MISSING', 'Saldo do lançamento ausente no extrato Inter.');
+      const balanceSource = columns.balance !== undefined && get('balance') ? { raw_balance: get('balance'), balance_cents: parseAmountCents(get('balance'), options) } : {};
+      const parsed = makeRow({ date, description, cents, externalId: provenanceIndex >= 0 ? null : get('external_id'), source: { line: row.line, fields: row.fields, converted_source_identity: provenance || undefined, raw_amount: columns.amount !== undefined ? get('amount') : { debit: get('debit'), credit: get('credit') }, ...balanceSource, ...(columns.history !== undefined ? { raw_history: get('history'), raw_description: rawDescription } : {}) } });
       return parsed;
     } catch (error) {
       if (error instanceof ImportError) { error.details.line = row.line; error.message = `Linha ${row.line}: ${error.message}`; }
       throw error;
     }
   });
-  return { transactions, metadata: { parser_version: PARSER_VERSION, format: 'csv', delimiter, currency: 'BRL', columns }, complete: true };
+  return { transactions, metadata: { parser_version: PARSER_VERSION, format: 'csv', delimiter, currency: 'BRL', columns, header_line: rows[headerIndex].line, ...preamble, ...(inter ? { format_variant: 'inter_current_account', layout_version: 1, balance_requires_confirmation: true, balance_reconciliation: reconcileCSVBalances(transactions, preamble.closing_balance) } : {}) }, complete: true };
 }
 
 const unescapeXML = text => text.replace(/&(?:amp|lt|gt|quot|apos|#9|#10|#13);/g, entity => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'", '&#9;':'\t', '&#10;':'\n', '&#13;':'\r' })[entity]);

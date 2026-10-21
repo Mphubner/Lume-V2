@@ -2,12 +2,15 @@ import { Worker } from 'node:worker_threads';
 import { ImportError, parseAmountCents, centsToDecimal, parseStatementDate, makeImportRow, finalizeStatement, MAX_IMPORT_ROWS } from '../domain/importParsers.js';
 import { MAX_IMPORT_BYTES, MAX_PDF_PAGES, MAX_OCR_PAGES } from '../domain/importLimits.js';
 import { recognizeLocalPage, inspectImage } from './localOcr.js';
+import { parseInterPDFPages } from './interPdfParser.js';
 
 const MONEY = /[+\-−–—]?\s*(?:R\$\s*)?(?:\d{1,3}(?:[.,]\d{3})+|\d+)[.,]\d{2}(?:\s*[DC]\b)?/g;
 
 /** Only explicit, complete source lines are supported. Unknown layouts fail closed. */
 export function parsePDFPages(pages) {
   if (!Array.isArray(pages) || !pages.length || pages.length > MAX_PDF_PAGES) throw new ImportError('PDF_PAGE_LIMIT', `PDF precisa ter entre 1 e ${MAX_PDF_PAGES} páginas.`);
+  const inter = parseInterPDFPages(pages);
+  if (inter) return inter;
   const transactions = [], balances = [];
   let currentDate = null, hasText = false;
   for (const [pageIndex, page] of pages.entries()) {
