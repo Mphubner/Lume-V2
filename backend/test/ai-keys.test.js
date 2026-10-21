@@ -7,6 +7,23 @@ const success = () => new Response(JSON.stringify({ choices: [{ finish_reason: '
 const failure = (status, error = {}, headers = {}) => new Response(JSON.stringify({ error }), { status, headers });
 const pool = env => getAIReadiness(env).configuration.find(item => item.provider === 'groq');
 
+test('short JSON tasks reserve reasoning tokens on the supported Groq model without changing other provider contracts', async () => {
+  const bodies = [];
+  const fetchImpl = async (_url, request) => { bodies.push(JSON.parse(request.body)); return success(); };
+  await callAI([{ role: 'user', content: 'JSON classification fixture' }], {
+    env: configured({ GROQ_API_KEY: 'fixture-valid' }), maxTokens: 100, json: true, fetchImpl,
+  });
+  assert.equal(bodies[0].model, 'openai/gpt-oss-20b');
+  assert.equal(bodies[0].max_completion_tokens, 1200);
+  assert.equal(bodies[0].reasoning_effort, 'low');
+  assert.equal(bodies[0].include_reasoning, false);
+  assert.equal(bodies[0].max_tokens, undefined);
+  await callAI([], { env: configured({ GROQ_API_KEY: 'fixture-other', AI_MODEL: 'custom-model' }), maxTokens: 100, fetchImpl });
+  assert.equal(bodies[1].max_tokens, 100);
+  assert.equal(bodies[1].reasoning_effort, undefined);
+  assert.equal(bodies[1].max_completion_tokens, undefined);
+});
+
 test('Groq readiness accepts CSV/JSON lists and aliases, deduplicates and never exposes values', () => {
   for (const list of ['fixture-a, fixture-b,fixture-a', '["fixture-a", "fixture-b", "fixture-a", null, 42]']) {
     const env = configured({ GROQ_API_KEYS: list, GROQ_API_KEY: ' fixture-b ', AI_API_KEY: 'fixture-c' });
