@@ -1,15 +1,17 @@
 import { useWorkspace } from '../../context/WorkspaceContext';
+import { useAuth } from '../../context/AuthContext';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { MessageCircle, Send, X, Sun } from 'lucide-react';
 import api from '../../services/api';
 
-export default function Chatbot() {
-  const { currentWorkspace, workspaceLabel } = useWorkspace();
+function ScopedChatbot({ currentWorkspace, workspaceLabel }) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([
     {
       role: 'bot',
-      content: 'Olá 👋 Sou a Lume, sua assistente financeira. Posso te ajudar a consultar dados conferidos e explicar os indicadores. Alterações financeiras precisam de revisão em Lançamentos! Como posso te ajudar hoje?',
+      content: 'Olá! Posso explicar seus registros e ajudar a montar um plano financeiro com prioridades e um cenário para revisar.',
+      actionHref: '/planejador',
     },
   ]);
   const [input, setInput] = useState('');
@@ -25,9 +27,10 @@ export default function Chatbot() {
 
     try {
       const response = await api.chat(userMsg, { workspace: currentWorkspace, history: messages.slice(-12).map(m => ({ role: m.role === 'bot' ? 'assistant' : 'user', content: m.content })) });
-      setMessages(prev => [...prev, { role: 'bot', content: response.message }]);
+      setMessages(prev => [...prev, { role: 'bot', content: response.message, actionHref: response.actionHref,
+        context: response.period ? `${response.period.startDate} a ${response.period.endDate} · ${response.coverage?.complete ? 'base conciliada' : 'base parcial'}` : null }]);
     } catch {
-      setMessages(prev => [...prev, { role: 'bot', content: 'Desculpe, ocorreu um erro. Tente novamente! 😊' }]);
+      setMessages(prev => [...prev, { role: 'bot', content: 'Não foi possível consultar os dados agora. Tente novamente para obter uma resposta com a base conferida.' }]);
     } finally {
       setLoading(false);
     }
@@ -60,6 +63,8 @@ export default function Chatbot() {
             {messages.map((msg, i) => (
               <div key={i} className={`chat-message ${msg.role}`}>
                 {msg.content}
+                {msg.context ? <small style={{ display: 'block', marginTop: '.5rem' }}>{msg.context}</small> : null}
+                {msg.actionHref ? <Link to={msg.actionHref} onClick={() => setIsOpen(false)} style={{ display: 'block', marginTop: '.5rem', color: 'var(--accent-gold)' }}>Abrir Planejador financeiro</Link> : null}
               </div>
             ))}
             {loading && (
@@ -88,10 +93,15 @@ export default function Chatbot() {
           </div>
 
           <div style={{ padding: '0.5rem 1rem', fontSize: '0.7rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-            Experimente: "Quanto gastei em alimentação este mês?"
+            Experimente: "Quero montar meu plano financeiro"
           </div>
         </div>
       )}
     </>
   );
+}
+export default function Chatbot() {
+  const { currentWorkspace, workspaceLabel } = useWorkspace();
+  const { user } = useAuth();
+  return <ScopedChatbot key={`${user?.id}:${currentWorkspace}`} currentWorkspace={currentWorkspace} workspaceLabel={workspaceLabel} />;
 }

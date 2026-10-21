@@ -4,13 +4,13 @@ import { AuthProvider, useAuth } from '../src/context/AuthContext';
 import { queryClient } from '../src/services/queryClient';
 import api from '../src/services/api';
 const auth = vi.hoisted(() => ({ getSession: vi.fn(), onAuthStateChange: vi.fn(), signOut: vi.fn() }));
-vi.mock('../src/services/supabase', () => ({ supabase: { auth } }));
+vi.mock('../src/services/supabase', () => ({ supabase: { auth }, googleAuthEnabled: false }));
 vi.mock('../src/services/api', () => ({ default: { sessionId: null, workspace: 'all', token: null, setToken(value) { this.token = value; }, getProfile: vi.fn() } }));
 function Probe() {
   const { user, profile, loading, signOut } = useAuth();
   return <div><p>User:{user?.id || 'anonymous'}</p><p>Profile:{profile?.full_name || 'none'}</p><p>Loading:{String(loading)}</p><button onClick={signOut}>Sair</button></div>;
 }
-const session = id => ({ user: { id }, access_token: `token-${id}` });
+const session = id => ({ user: { id, email: `${id}@example.test`, email_confirmed_at: '2026-10-20T00:00:00Z' }, access_token: `token-${id}` });
 describe('Identidade: cache e respostas fora de ordem', () => {
   let authChanged;
   beforeEach(() => {

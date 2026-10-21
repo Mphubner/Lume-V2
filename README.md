@@ -4,6 +4,8 @@ React/Vite frontend, Express API e Supabase/PostgreSQL. Esta revisão prepara a 
 
 As correções, testes e pendências dos 26 achados estão na [matriz de implementação](docs/IMPLEMENTATION_STATUS.md).
 
+O fluxo novo usa email/senha e confirmação; Google fica desabilitado por padrão. A configuração do envio está em [acesso por email](docs/AUTH_EMAIL_SETUP.md). O planejador em `/planejador` calcula cenários verificáveis mesmo sem provedor de IA.
+
 ## Desenvolvimento
 
 Use Node 22.20 ou posterior compatível. Instale dependências com `npm ci` dentro de `backend` e `frontend`. Copie `backend/.env.example` para `.env` e configure um projeto Supabase de homologação; nenhuma chave de serviço pode ter prefixo `VITE_`.
@@ -13,6 +15,8 @@ No frontend, configure `VITE_API_URL`, `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON
 ## Verificação
 
 Em `backend`: `npm test` e `npm run test:sql`. O segundo comando usa exclusivamente PostgreSQL local, cria um banco descartável, aplica o schema base e todas as migrações, verifica reaplicação e executa cenários financeiros transacionais. Configure `TEST_DATABASE_URL` quando a porta local não for 55439.
+
+Execute também `npm run test:sql -- --legacy-schema`: usa a estrutura antiga observada no projeto real em 20/10/2026, sem dados pessoais. Para inspecionar metadados de um destino, configure `DATABASE_URL` e execute `node scripts/inspect-supabase.mjs` em `backend`; a transação é somente de leitura.
 
 Em `frontend`: `npm run lint`, `npm test` e `npm run build`. A automação em `.github/workflows/quality.yml` executa os principais bloqueios de qualidade em cada alteração.
 

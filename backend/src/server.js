@@ -7,6 +7,8 @@ import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { supabase } from './config/supabase.js';
 import { startImportWorker } from './services/importWorker.js';
+import { getImportCapabilities } from './services/importPipeline.js';
+import { getAIReadiness } from './services/aiService.js';
 import { checked } from './services/access.js';
 import transactionsRouter from './routes/transactions.js';
 import accountsRouter from './routes/accounts.js';
@@ -53,11 +55,15 @@ export function createApp({db=supabase,workerState=()=>({enabled:false,healthy:t
   try{
    if(!db)throw new Error('unconfigured');
    const state=checked(await db.rpc('application_readiness')),worker=workerState();
-   if(state?.schema_version!=='202610190006'||!worker.healthy)throw new Error('not_ready');
-   res.json({status:'ready',schema_version:state.schema_version,import_worker:worker.enabled});
+   if(state?.schema_version!=='202610200008'||!worker.healthy)throw new Error('not_ready');
+   const ai=getAIReadiness();
+   res.json({status:'ready',schema_version:state.schema_version,import_worker:worker.enabled,planner:ai.planner,ai:{status:ai.status,dependencyVerification:ai.dependencyVerification}});
   }catch{res.status(503).json({status:'not_ready',error:'Banco, migrações ou processamento indisponível.'});}
  });
- app.get('/api/capabilities',(_req,res)=>res.json({bank_connection:false,imports:['csv','ofx','pdf_review'],billing:process.env.BILLING_ENABLED==='true',notifications:['in_app']}));
+ app.get('/api/capabilities',async(_req,res)=>{
+  const pipeline=await getImportCapabilities();
+  res.json({bank_connection:false,imports:pipeline.formats,import_pipeline:pipeline,billing:process.env.BILLING_ENABLED==='true',notifications:['in_app'],planner:{available:true,mode:'deterministic_with_optional_presentation'}});
+ });
  app.use('/api/profile',profileRouter);
  app.use('/api/dashboard',dashboardRouter);
  app.use('/api/transactions',transactionsRouter);

@@ -98,6 +98,14 @@ export async function getFinancialContext(db, userId, query = {}, options = {}) 
     { id: 'reserve.current', label: 'Reserva declarada', value: reserve?.current_amount ?? null, unit: 'BRL', source: { ...source('emergency_reserve'), recordIds: reserves.map(row => row.id) } },
     { id: 'goals.saved', label: 'Valor registrado nas metas', value: goalsProgress.totalSaved, unit: 'BRL', source: { ...source('goals'), recordIds: goals.map(row => row.id) } },
     { id: 'recurring.upcoming', label: 'Ocorrências pendentes nos próximos quatorze dias', value: upcomingBills.length, unit: 'count', source: { ...source('recurring_bills'), occurrenceIds: upcomingBills.map(row => row.id) } },
+    { id: 'debts.installments', label: 'Parcelas cadastradas nas dívidas ativas', value: monetaryTotal(debts.filter(row => ['active', 'negotiating'].includes(row.status)).map(row => row.installment_amount ?? 0)), unit: 'BRL', source: { ...source('debts'), recordIds: debts.map(row => row.id), missingAmounts: debts.filter(row => row.installment_amount == null).map(row => row.id) } },
+    { id: 'reserve.target', label: 'Alvo declarado da reserva', value: reserve?.target_amount ?? null, unit: 'BRL', source: { ...source('emergency_reserve'), recordIds: reserves.map(row => row.id) } },
+    { id: 'recurring.schedule', label: 'Ocorrências calculadas a partir das recorrências cadastradas', value: occurrences, unit: 'schedule', source: { ...source('recurring_bills'), recordIds: recurring.map(row => row.id), startDate: snapshot.period.startDate, endDate: occurrenceEnd, asOf: snapshot.period.asOf, incompleteSchedules } },
+    ...debts.flatMap(row => [
+      { id: 'debt.' + row.id + '.balance', label: 'Saldo cadastrado: ' + row.name, value: Number(row.current_balance ?? row.original_amount), unit: 'BRL', source: { ...source('debts'), recordIds: [row.id] } },
+      { id: 'debt.' + row.id + '.installment', label: 'Parcela cadastrada: ' + row.name, value: row.installment_amount == null ? null : Number(row.installment_amount), unit: 'BRL', source: { ...source('debts'), recordIds: [row.id] } },
+    ]),
+    ...goals.map(row => ({ id: 'goal.' + row.id + '.remaining', label: 'Valor restante: ' + row.name, value: fromCents(Math.max(0, toCents(row.target_amount) - toCents(row.current_amount))), unit: 'BRL', source: { ...source('goals'), recordIds: [row.id], calculation: 'max(target_amount - current_amount, 0)', deadline: row.deadline } })),
   ];
   context.fingerprint = fingerprint({ snapshot: snapshot.fingerprint, debts, goals, reserves, recurring, settlements });
   context.generatedAt = new Date().toISOString();

@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import {
   LayoutDashboard, BarChart3, Target, Wallet, Shield, Building2, Heart,
   ArrowLeftRight, Receipt, FileText, Scale, Upload, Settings, LogOut,
-  Menu, ChevronDown, ChevronRight, Sun
+  Menu, ChevronDown, ChevronRight, Sun, ListChecks
 } from 'lucide-react';
 import NotificationBell from '../ui/NotificationBell';
 import WorkspaceSelector from './WorkspaceSelector';
@@ -16,6 +16,7 @@ const navGroups = [
     items: [
       { path: '/dashboard', label: 'Resumo Financeiro', icon: LayoutDashboard },
       { path: '/analytics', label: 'Análise Avançada', icon: BarChart3 },
+      { path: '/planejador', label: 'Planejador Financeiro', icon: ListChecks },
     ],
   },
   {

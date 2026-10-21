@@ -1,11 +1,13 @@
 import { Worker } from 'node:worker_threads';
 import { ImportError, parseAmountCents, centsToDecimal, parseStatementDate, makeImportRow, finalizeStatement, MAX_IMPORT_ROWS } from '../domain/importParsers.js';
+import { MAX_IMPORT_BYTES, MAX_PDF_PAGES, MAX_OCR_PAGES } from '../domain/importLimits.js';
+import { recognizeLocalPage, inspectImage } from './localOcr.js';
 
 const MONEY = /[+\-−–—]?\s*(?:R\$\s*)?(?:\d{1,3}(?:[.,]\d{3})+|\d+)[.,]\d{2}(?:\s*[DC]\b)?/g;
 
 /** Only explicit, complete source lines are supported. Unknown layouts fail closed. */
 export function parsePDFPages(pages) {
-  if (!Array.isArray(pages) || !pages.length || pages.length > 80) throw new ImportError('PDF_PAGE_LIMIT', 'PDF precisa ter entre 1 e 80 páginas.');
+  if (!Array.isArray(pages) || !pages.length || pages.length > MAX_PDF_PAGES) throw new ImportError('PDF_PAGE_LIMIT', `PDF precisa ter entre 1 e ${MAX_PDF_PAGES} páginas.`);
   const transactions = [], balances = [];
   let currentDate = null, hasText = false;
   for (const [pageIndex, page] of pages.entries()) {
@@ -50,7 +52,7 @@ export function parsePDFPages(pages) {
 }
 
 export function extractPDFText(buffer, { timeoutMs = 30000, WorkerClass = Worker, signal } = {}) {
-  if (buffer.length > 5 * 1024 * 1024) return Promise.reject(new ImportError('FILE_LIMIT', 'PDF excede 5 MB.'));
+  if (buffer.length > MAX_IMPORT_BYTES) return Promise.reject(new ImportError('FILE_LIMIT', 'PDF excede 20 MB.'));
   if (buffer.subarray(0, 5).toString() !== '%PDF-') return Promise.reject(new ImportError('INVALID_PDF', 'Conteúdo não é um PDF.'));
   return new Promise((resolve, reject) => {
     const worker = new WorkerClass(new URL('./importPdfTextWorker.js', import.meta.url), { workerData: { buffer }, resourceLimits: { maxOldGenerationSizeMb: 96, maxYoungGenerationSizeMb: 16 } });
@@ -75,5 +77,26 @@ export function extractPDFText(buffer, { timeoutMs = 30000, WorkerClass = Worker
 
 export async function extractTransactionsFromPDF(buffer, _categories = [], options = {}) {
   const pages = await extractPDFText(buffer, options);
-  return finalizeStatement(parsePDFPages(pages), buffer);
+  const reports=[];let ocrPages=0;const start=Date.now();
+  for(let index=0;index<pages.length;index++) {
+    const cached=options.cachedPages?.find(page=>page.page===index+1);
+    if(cached){pages[index]=cached.text;reports.push(cached.info);if(cached.info?.engine==='tesseract-local')ocrPages++;continue;}
+    let result={text:pages[index],info:{page:index+1,engine:'pdf-text',review_required:true}};
+    if(!pages[index].trim()) {
+      if(++ocrPages>MAX_OCR_PAGES)throw new ImportError('OCR_PAGE_LIMIT',`OCR limitado a ${MAX_OCR_PAGES} páginas digitalizadas.`,{page:index+1});
+      if(Date.now()-start>120000)throw new ImportError('OCR_TOTAL_TIMEOUT','OCR excedeu o orçamento de dois minutos; nenhuma página foi omitida.',{page:index+1});
+      result=await (options.recognizePage||recognizeLocalPage)(buffer,{page:index+1,signal:options.signal});
+    }
+    pages[index]=result.text;reports.push(result.info);await options.onPage?.({page:index+1,...result});
+  }
+  const parsed=parsePDFPages(pages);parsed.metadata.page_reports=reports;parsed.metadata.ocr_pages=ocrPages;
+  return finalizeStatement(parsed, buffer);
+}
+
+export async function extractTransactionsFromImage(buffer,type,options={}) {
+  inspectImage(buffer,type);
+  const result=options.cachedPages?.[0]||await (options.recognizePage||recognizeLocalPage)(buffer,{imageType:type,page:1,signal:options.signal});
+  await options.onPage?.({page:1,...result});
+  const parsed=parsePDFPages([result.text]);parsed.metadata={...parsed.metadata,format:type,ocr_pages:1,page_reports:[result.info],extraction:'tesseract-local-signed-lines-v1'};
+  return finalizeStatement(parsed,buffer);
 }

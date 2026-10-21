@@ -6,8 +6,10 @@ try {
   const pdfParse = require('pdf-parse/lib/pdf-parse.js');
   const pages = [];
   let characters = 0;
-  const pdf = await pdfParse(Buffer.from(workerData.buffer), {
-    max: 81,
+  // Old pdf.js assumes Uint8Array.slice copies. Buffer.slice is a view and can
+  // corrupt xref bytes while decoding; never pass a Node Buffer to that engine.
+  const pdf = await pdfParse(Uint8Array.from(workerData.buffer), {
+    max: 61,
     pagerender: async page => {
       const content = await page.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false });
       let y = null, text = '';
@@ -23,7 +25,10 @@ try {
       return text;
     },
   });
-  if (pdf.numpages > 80) parentPort.postMessage({ error: 'PDF excede 80 páginas.', code: 'PDF_PAGE_LIMIT' });
+  if (pdf.numpages > 60) parentPort.postMessage({ error: 'PDF excede 60 páginas.', code: 'PDF_PAGE_LIMIT' });
+  // pdf-parse catches page rendering failures internally. A missing page must
+  // make the entire document fail, never silently yield a partial statement.
+  else if (pages.length !== pdf.numpages) parentPort.postMessage({error:'Uma ou mais páginas não puderam ser lidas. Nenhuma página foi omitida.',code:'PDF_UNREAD_PAGE'});
   else parentPort.postMessage({ pages });
 } catch (error) {
   parentPort.postMessage({ error: error.message === 'PDF_TEXT_LIMIT' ? 'PDF excede limite de texto.' : 'PDF corrompido, protegido ou layout não suportado.', code: 'PDF_INVALID' });

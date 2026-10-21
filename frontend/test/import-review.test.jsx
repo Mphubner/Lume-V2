@@ -29,7 +29,7 @@ describe('Revisão de extratos: lote íntegro e estados verdadeiros', () => {
     await waitFor(() => expect(api.reconcileAll).toHaveBeenCalledOnce());
     const payload = api.reconcileAll.mock.calls[0][0];
     expect(payload.ids).toEqual(rows.map(row => row.id));
-    expect(payload.balance_check).toEqual({ opening_balance: 100, closing_balance: 100, period_start: '2026-09-01', period_end: '2026-09-30', source_confirmed: true });
+    expect(payload.balance_check).toEqual({ opening_balance: '100', closing_balance: '100', period_start: '2026-09-01', period_end: '2026-09-30', source_confirmed: true });
     expect(close).toHaveBeenCalledOnce();
   });
   it('interrompe aprovação se o lote mudar entre páginas', async () => {

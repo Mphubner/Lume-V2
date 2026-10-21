@@ -16,6 +16,7 @@ class ApiService {
   }
 
   async request(endpoint, options = {}) {
+    const { invalidate = true, ...fetchOptions } = options;
     const requestUrl = new URL(`${API_URL}${endpoint}`, window.location.origin);
     const contextual = /^\/(dashboard|notifications|audit|accounts|transactions|categories|recurring|debts|goals|budgets|health|reserve|ai|import)(\/|\?|$)/.test(endpoint) || endpoint.startsWith('/profile/export') || endpoint.startsWith('/profile/onboarding');
     if (contextual && !requestUrl.searchParams.has('workspace')) requestUrl.searchParams.set('workspace', this.workspace);
@@ -30,7 +31,7 @@ class ApiService {
 
     try {
       const response = await fetch(url, {
-        ...options,
+        ...fetchOptions,
         headers,
         body: options.body ? JSON.stringify(options.body) : undefined,
       });
@@ -48,7 +49,7 @@ class ApiService {
       this._offlineWarned = false;
       const data = await response.json();
       if (sessionId !== this.sessionId || (contextual && workspace !== this.workspace)) throw new Error('Sessão alterada; solicitação descartada.');
-      if (options.method && options.method !== 'GET') await queryClient.invalidateQueries();
+      if (invalidate && options.method && options.method !== 'GET') await queryClient.invalidateQueries();
       return data;
     } catch (err) {
       window.dispatchEvent(new CustomEvent('lume:api-error', { detail: { message: err.message } }));
@@ -141,8 +142,10 @@ class ApiService {
   updateReserve(data) { return this.request('/reserve/update', { method: 'POST', body: data }); }
 
   // AI
-  getInsights(force = false, context = {}) { return this.request(`/ai/insights${force ? '?force=true' : ''}`, { method: 'POST', body: context }); }
-  chat(message, context = {}) { return this.request('/ai/chat', { method: 'POST', body: { message, ...context } }); }
+  getInsights(force = false, context = {}) { return this.request(`/ai/insights${force ? '?force=true' : ''}`, { method: 'POST', body: context, invalidate: false }); }
+  chat(message, context = {}) { return this.request('/ai/chat', { method: 'POST', body: { message, ...context }, invalidate: false }); }
+  getAIStatus() { return this.request('/ai/status'); }
+  getFinancialPlan(data = {}) { return this.request('/ai/plan', { method: 'POST', body: data, invalidate: false }); }
   getAIRules() { return this.request('/ai/rules'); }
   updateAIRule(id, data) { return this.request(`/ai/rules/${id}`, { method: 'PUT', body: data }); }
   deleteAIRule(id) { return this.request(`/ai/rules/${id}`, { method: 'DELETE' }); }

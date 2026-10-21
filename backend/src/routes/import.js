@@ -4,13 +4,16 @@ import multer from 'multer';
 import { authMiddleware } from '../middleware/auth.js';
 import { supabase } from '../config/supabase.js';
 import { HTTPError, assertUUID, checked, requireRecordAccess, resolveScope, scopeQuery, handleError } from '../services/access.js';
-import { sha256, ImportError, parseAmountCents, centsToDecimal, parseStatementDate } from '../domain/importParsers.js';
+import { sha256, ImportError, parseAmountCents, centsToDecimal, parseStatementDate, MAX_IMPORT_ROWS } from '../domain/importParsers.js';
+import { MAX_IMPORT_BYTES } from '../domain/importLimits.js';
+import { getImportCapabilities } from '../services/importPipeline.js';
+import { convertStatement } from '../domain/statementConversion.js';
 import { IMPORT_BUCKET } from '../services/importWorker.js';
 import { enrichFinancialRows } from '../services/relations.js';
 
 const router = Router();
 router.use(authMiddleware);
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 8, fieldSize: 8192 } }).single('file');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_IMPORT_BYTES, files: 1, fields: 8, fieldSize: 8192 } }).single('file');
 // Admission control happens BEFORE buffering a file. Durable queue limits also
 // apply across instances, once the document hash and authorized account are known.
 export function createBoundedUpload(uploadHandler=upload) {
@@ -21,7 +24,7 @@ export function createBoundedUpload(uploadHandler=upload) {
   const release = () => activeUploads.delete(req.user.id);
   res.once('finish', release); res.once('close', release);
   uploadHandler(req, res, error => {
-    if (error) { release(); return res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Arquivo excede o limite de 5 MB.' : 'Upload inválido. Envie um único arquivo.' }); }
+    if (error) { release(); return res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Arquivo excede o limite de 20 MB.' : 'Upload inválido. Envie um único arquivo.' }); }
     next();
   });
  };
@@ -29,7 +32,7 @@ export function createBoundedUpload(uploadHandler=upload) {
 const boundedUpload=createBoundedUpload();
 
 const publicJob = row => {
-  const { storage_path: _storage, lease_token: _token, lease_until: _lease, ...rest } = row;
+  const { storage_path: _storage, lease_token: _token, lease_until: _lease, pipeline_manifest: _manifest, ...rest } = row;
   return rest;
 };
 const pageNumber = (value, fallback, max = Number.MAX_SAFE_INTEGER) => {
@@ -64,7 +67,11 @@ router.post('/upload', boundedUpload, async (req, res) => {
       if (scope.id !== account.workspace_id) throw new HTTPError(403, 'A conta não pertence ao espaço selecionado.');
     }
     const fileType = req.file.originalname.split('.').pop().toLowerCase();
-    if (!['csv', 'ofx', 'pdf'].includes(fileType)) throw new HTTPError(415, 'Use CSV, OFX ou PDF com texto. XLSX não é suportado: exporte a planilha como CSV.');
+    if (!['csv','ofx','pdf','xlsx','txt','png','jpg','jpeg'].includes(fileType)) throw new HTTPError(415, 'Use CSV, OFX, XLSX, TXT tabular, PDF ou imagem PNG/JPEG. Outros formatos não são convertidos.');
+    if (['png','jpg','jpeg'].includes(fileType)) {
+      const capabilities=await getImportCapabilities();
+      if(!capabilities.ocr.available)throw new HTTPError(422,capabilities.ocr.reason);
+    }
     const options = parseOptions(req.body.parser_options);
     job = checked(await supabase.rpc('reserve_import_job', {
       p_actor: req.user.id, p_id: randomUUID(), p_account: account.id, p_hash: sha256(req.file.buffer),
@@ -81,6 +88,23 @@ router.post('/upload', boundedUpload, async (req, res) => {
     }
     return fail(res, error);
   }
+});
+
+router.get('/capabilities',async (_req,res)=>res.json(await getImportCapabilities()));
+
+router.get('/:id/convert',async (req,res)=>{
+  try {
+    const job=await requireRecordAccess(supabase,'imports',req.params.id,req.user.id);
+    if(!['needs_review','completed','reversed'].includes(job.status))throw new HTTPError(409,'Aguarde a extração completa para converter o documento.');
+    if(!['csv','ofx'].includes(req.query.format))throw new HTTPError(400,'Escolha CSV ou OFX.');
+    const rows=[];
+    for(let offset=0;offset<Number(job.total_transactions);offset+=500) {
+      const page=checked(await supabase.from('import_rows').select('row_number,date,description,amount_cents,source_identity').eq('import_id',job.id).order('row_number').range(offset,offset+499));
+      rows.push(...page);
+    }
+    const content=convertStatement(rows,job,req.query.format);
+    return res.json({filename:`lume-conversao-${job.id}.${req.query.format}`,media_type:req.query.format==='csv'?'text/csv;charset=utf-8':'application/x-ofx;charset=utf-8',content,review_required:true,notice:'Conversão das linhas extraídas para conferência. Não comprova conferência, saldo bancário ou aprovação. Identificadores de conversão representam documento e linha; não foram emitidos pelo banco.'});
+  }catch(error){return fail(res,error);}
 });
 
 router.get('/history', async (req, res) => {
@@ -155,7 +179,7 @@ router.patch('/rows/:id', async (req, res) => {
 
 async function approve(actor, body) {
   assertUUID(body.import_id);
-  if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > 5000 || new Set(body.ids).size !== body.ids.length) throw new HTTPError(400, 'Selecione explicitamente todas as linhas do lote.');
+  if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > MAX_IMPORT_ROWS || new Set(body.ids).size !== body.ids.length) throw new HTTPError(400, 'Selecione explicitamente todas as linhas do lote.');
   body.ids.forEach(assertUUID);
   const balance = body.balance_check;
   if (!balance || balance.source_confirmed !== true) throw new HTTPError(400, 'Confira conta, documento, período e saldos antes de aprovar.');

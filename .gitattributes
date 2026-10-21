@@ -8,3 +8,5 @@
 *.css text eol=lf
 .gitignore text eol=lf
 *.example text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf

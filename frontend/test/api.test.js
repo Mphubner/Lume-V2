@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import api from '../src/services/api';
 import { queryClient } from '../src/services/queryClient';
+import { QueryObserver } from '@tanstack/react-query';
 const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
 describe('API: escopo, identidade e erros verificáveis', () => {
   beforeEach(() => { api.sessionId = 'session-A'; api.workspace = 'all'; api.token = 'test-token'; vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({ ok: true }))); vi.spyOn(console, 'error').mockImplementation(() => {}); });
@@ -36,5 +37,18 @@ describe('API: escopo, identidade e erros verificáveis', () => {
     const event = vi.fn(); window.addEventListener('lume:api-error', event);
     await expect(api.getDashboard()).rejects.toThrow('Serviço indisponível');
     expect(event).toHaveBeenCalledOnce(); window.removeEventListener('lume:api-error', event);
+  });
+  it('conclui o plano observado sem invalidar a própria consulta ou refazer dados financeiros', async () => {
+    let timer;
+    const observer = new QueryObserver(queryClient, { queryKey: ['financial-plan', 'session-A', 'all'], queryFn: () => api.getFinancialPlan(), retry: false });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      const completed = queryClient.fetchQuery({ queryKey: ['financial-plan', 'session-A', 'all'], queryFn: () => api.getFinancialPlan() });
+      expect(await Promise.race([completed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Consulta do plano bloqueada')), 1000); })])).toEqual({ ok: true });
+      await api.getInsights(); await api.chat('Meu plano');
+      expect(fetch).toHaveBeenCalledTimes(3);
+      expect(observer.getCurrentResult().status).toBe('success');
+      expect(fetch.mock.calls.every(([, options]) => !Object.hasOwn(options, 'invalidate'))).toBe(true);
+    } finally { clearTimeout(timer); unsubscribe(); }
   });
 });

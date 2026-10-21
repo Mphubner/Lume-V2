@@ -57,6 +57,13 @@ test('readiness distinguishes a living process from an unavailable database',asy
  const app=createApp({db:null});const live=await request(app,'/health',undefined,'GET');const ready=await request(app,'/ready',undefined,'GET');
  assert.equal(live.status,200);assert.equal(ready.status,503);assert.equal(ready.body.status,'not_ready');
 });
+test('readiness rejects an older schema and a failed worker without requiring external AI',async()=>{
+ const dbFor=version=>({rpc:async()=>({data:{schema_version:version},error:null})});
+ const old=await request(createApp({db:dbFor('202610190006')}),'/ready',undefined,'GET');assert.equal(old.status,503);
+ const failed=await request(createApp({db:dbFor('202610200008'),workerState:()=>({enabled:true,healthy:false})}),'/ready',undefined,'GET');assert.equal(failed.status,503);
+ const ready=await request(createApp({db:dbFor('202610200008'),workerState:()=>({enabled:true,healthy:true})}),'/ready',undefined,'GET');
+ assert.equal(ready.status,200);assert.equal(ready.body.schema_version,'202610200008');assert.equal(ready.body.planner.available,true);assert.equal(ready.body.ai.dependencyVerification,'not_checked');
+});
 test('subscription normalizer uses the item billing period and rejects multiple items',()=>{
  const sub={id:'sub_1',customer:'cus_1',status:'active',items:{data:[{price:{id:'price_1'},current_period_start:100,current_period_end:200}]}};
  assert.equal(normalizeSubscription(sub).current_period_end,new Date(200000).toISOString());

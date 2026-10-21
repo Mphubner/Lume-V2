@@ -18,12 +18,14 @@ const LoginPage = lazy(() => import('./pages/auth/LoginPage'));
 const RegisterPage = lazy(() => import('./pages/auth/RegisterPage'));
 const ForgotPasswordPage = lazy(() => import('./pages/auth/ForgotPasswordPage'));
 const ResetPasswordPage = lazy(() => import('./pages/auth/ResetPasswordPage'));
+const AuthCallbackPage = lazy(() => import('./pages/auth/AuthCallbackPage'));
 const OnboardingPage = lazy(() => import('./pages/auth/OnboardingPage'));
 const CheckoutPage = lazy(() => import('./pages/auth/CheckoutPage'));
 
 // App Pages (protected)
 const DashboardPage = lazy(() => import('./pages/dashboard/DashboardPage'));
 const AnalyticsPage = lazy(() => import('./pages/analytics/AnalyticsPage'));
+const PlannerPage = lazy(() => import('./pages/planner/PlannerPage'));
 const GoalsPage = lazy(() => import('./pages/goals/GoalsPage'));
 const BudgetPage = lazy(() => import('./pages/budget/BudgetPage'));
 const ReservePage = lazy(() => import('./pages/reserve/ReservePage'));
@@ -52,6 +54,7 @@ export default function App() {
           <Route path="/cadastro" element={<RegisterPage />} />
           <Route path="/esqueci-senha" element={<ForgotPasswordPage />} />
           <Route path="/resetar-senha" element={<ResetPasswordPage />} />
+          <Route path="/auth/callback" element={<AuthCallbackPage />} />
           <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
           <Route path="/checkout" element={<ProtectedRoute><CheckoutPage /></ProtectedRoute>} />
 
@@ -63,6 +66,7 @@ export default function App() {
           }>
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/analytics" element={<AnalyticsPage />} />
+            <Route path="/planejador" element={<PlannerPage />} />
             <Route path="/metas" element={<GoalsPage />} />
             <Route path="/orcamento" element={<BudgetPage />} />
             <Route path="/reserva" element={<ReservePage />} />

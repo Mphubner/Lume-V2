@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const PARSER_VERSION = 'lume-statements-2';
-export const MAX_IMPORT_ROWS = 5000;
+export const MAX_IMPORT_ROWS = 20000;
 
 export class ImportError extends Error {
   constructor(code, message, details = {}) {
@@ -180,7 +180,13 @@ export function parseCSV(content, options = {}) {
         if (debit < 0n || credit < 0n || (debit !== 0n && credit !== 0n)) fail('AMBIGUOUS_AMOUNT', 'Débito e crédito devem ser magnitudes positivas e somente um deve estar preenchido.');
         cents = (credit - debit).toString();
       }
-      return makeRow({ date: parseStatementDate(get('date')), description: get('description'), cents, externalId: get('external_id'), source: { line: row.line, fields: row.fields, raw_amount: columns.amount !== undefined ? get('amount') : { debit: get('debit'), credit: get('credit') } } });
+      // Conversion identifiers are document provenance, never bank identity.
+      const provenanceIndex = header.indexOf('lume_source_identity');
+      const provenance = provenanceIndex >= 0 ? row.fields[provenanceIndex].trim() : '';
+      if (provenance && !/^[a-f0-9]{64}$/.test(provenance)) fail('INVALID_PROVENANCE', 'Identidade de origem da conversão inválida.');
+      const description = header.includes('lume_conversion') && get('description').startsWith("'csv:") ? get('description').slice(5) : get('description');
+      const parsed = makeRow({ date: parseStatementDate(get('date')), description, cents, externalId: provenanceIndex >= 0 ? null : get('external_id'), source: { line: row.line, fields: row.fields, converted_source_identity: provenance || undefined, raw_amount: columns.amount !== undefined ? get('amount') : { debit: get('debit'), credit: get('credit') } } });
+      return parsed;
     } catch (error) {
       if (error instanceof ImportError) { error.details.line = row.line; error.message = `Linha ${row.line}: ${error.message}`; }
       throw error;
@@ -189,7 +195,7 @@ export function parseCSV(content, options = {}) {
   return { transactions, metadata: { parser_version: PARSER_VERSION, format: 'csv', delimiter, currency: 'BRL', columns }, complete: true };
 }
 
-const unescapeXML = text => text.replace(/&(?:amp|lt|gt|quot|apos);/g, entity => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'" })[entity]);
+const unescapeXML = text => text.replace(/&(?:amp|lt|gt|quot|apos|#9|#10|#13);/g, entity => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'", '&#9;':'\t', '&#10;':'\n', '&#13;':'\r' })[entity]);
 const tag = (text, name) => unescapeXML(text.match(new RegExp(`<${name}\\s*>\\s*([^<\\r\\n]*)`, 'i'))?.[1]?.trim() || '');
 
 export function parseOFX(content) {
@@ -208,7 +214,8 @@ export function parseOFX(content) {
     const block = match[1], fitid = tag(block, 'FITID');
     if (!fitid || fitid.length > 256) fail('OFX_FITID', 'OFX precisa de FITID válido em cada lançamento.', { line: index + 1 });
     const rawAmount = tag(block, 'TRNAMT');
-    return makeRow({ date: parseStatementDate(tag(block, 'DTPOSTED'), { ofx: true }), description: tag(block, 'MEMO') || tag(block, 'NAME') || `Lançamento ${fitid}`, cents: parseAmountCents(rawAmount), externalId: fitid, source: { line: index + 1, fitid, raw_amount: rawAmount, bank_type: tag(block, 'TRNTYPE'), raw: match[0] } });
+    const converted = /^LUME-CONVERTED-[a-f0-9]{64}$/.test(fitid);
+    return makeRow({ date: parseStatementDate(tag(block, 'DTPOSTED'), { ofx: true }), description: tag(block, 'MEMO') || tag(block, 'NAME') || `Lançamento ${fitid}`, cents: parseAmountCents(rawAmount), externalId: converted ? null : fitid, source: { line: index + 1, fitid, converted_source_identity: converted ? fitid.slice(15) : undefined, raw_amount: rawAmount, bank_type: tag(block, 'TRNTYPE'), raw: match[0] } });
   });
   const ledger = content.match(/<LEDGERBAL\s*>([\s\S]*?)<\/LEDGERBAL\s*>/i)?.[1];
   const end = tag(content, 'DTEND'), start = tag(content, 'DTSTART');
@@ -230,7 +237,7 @@ export function finalizeStatement(result, buffer) {
   for (let index = 0; index < result.transactions.length; index++) {
     const row = result.transactions[index];
     row.row_number = index + 1;
-    row.source_identity = sha256(`${documentHash}:${PARSER_VERSION}:${index + 1}`);
+    row.source_identity = row.source?.converted_source_identity || sha256(`${documentHash}:${PARSER_VERSION}:${index + 1}`);
     if (row.external_id) {
       const previous = externalIds.get(row.external_id);
       if (previous && previous !== row.content_fingerprint) fail('EXTERNAL_ID_CONFLICT', 'O mesmo identificador bancário possui conteúdo divergente no arquivo.');
@@ -245,7 +252,7 @@ export function finalizeStatement(result, buffer) {
 export function parseStatementBuffer(buffer, fileType, options = {}) {
   const { text, encoding } = decodeStatement(buffer);
   let result;
-  if (fileType === 'csv') result = parseCSV(text, options);
+  if (fileType === 'csv' || fileType === 'txt') result = parseCSV(text, options);
   else if (fileType === 'ofx') result = parseOFX(text);
   else fail('UNSUPPORTED_FORMAT', 'Exporte o extrato como CSV ou OFX.');
   result.metadata.encoding = encoding;

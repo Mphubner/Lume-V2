@@ -40,7 +40,7 @@ export default function ImportAuditModal({ importId, onClose }) {
         ids.push(...page.transactions.map(row => row.id));
       }
       if (new Set(ids).size !== total) throw new Error('Nem todas as linhas foram carregadas. A aplicação foi cancelada.');
-      await api.reconcileAll({ import_id: importId, ids, balance_check: { ...balance, opening_balance: Number(balance.opening_balance), closing_balance: Number(balance.closing_balance) } });
+      await api.reconcileAll({ import_id: importId, ids, balance_check: { ...balance } });
       onClose();
     } catch (e) { setError(e); } finally { setBusy(false); }
   };
