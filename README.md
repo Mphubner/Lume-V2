@@ -6,6 +6,8 @@ As correções, testes e pendências dos 26 achados estão na [matriz de impleme
 
 O fluxo novo usa email/senha e confirmação; Google fica desabilitado por padrão. A configuração do envio está em [acesso por email](docs/AUTH_EMAIL_SETUP.md). O planejador em `/planejador` calcula cenários verificáveis mesmo sem provedor de IA.
 
+A conferência de extratos oferece sugestões de categorias, preserva escolhas manuais e permite ensinar classificações após a aprovação. Veja [categorias na importação](docs/IMPORT_CATEGORIZATION.md).
+
 ## Desenvolvimento
 
 Use Node 22.20 ou posterior compatível. Instale dependências com `npm ci` dentro de `backend` e `frontend`. Copie `backend/.env.example` para `.env` e configure um projeto Supabase de homologação; nenhuma chave de serviço pode ter prefixo `VITE_`.
