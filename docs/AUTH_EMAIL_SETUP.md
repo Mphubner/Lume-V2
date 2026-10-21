@@ -21,7 +21,7 @@ O primeiro teste com Brevo foi aceito pelo Supabase (HTTP 200), mas o histórico
 
 Em 21/10/2026, o responsável confirmou `contato@lumefin.com.br`. O Brevo mostrou esse remetente verificado e o domínio `lumefin.com.br` autenticado, com Branded mail, DKIM e DMARC configurados. O remetente correto foi salvo no Supabase e conferido novamente após recarregar o painel.
 
-O novo teste de recuperação foi aceito pelo Supabase às 15:34:10 UTC de 21/10/2026 (HTTP 200). O Brevo registrou `Delivered` às 12:34 no horário local, usando o remetente correto; a evidência local está em `D:\Lume\validacao-2026-10-21\brevo-delivered-final.png`. O recebimento na caixa e a abertura do link ainda aguardam confirmação humana. O envio desse teste não alterou a senha.
+O novo teste de recuperação foi aceito pelo Supabase às 15:34:10 UTC de 21/10/2026 (HTTP 200). O Brevo registrou `Delivered` às 12:34 no horário local, usando o remetente correto; a evidência local está em `D:\Lume\validacao-2026-10-21\brevo-delivered-final.png`. O responsável confirmou o recebimento da mensagem. A abertura do link e a conclusão da recuperação ainda não foram confirmadas. O envio desse teste não alterou a senha.
 
 ## Retorno e confirmação
 
@@ -35,4 +35,4 @@ Confira os modelos de confirmação/recuperação para manter o link `{{ .Confir
 
 Use duas contas fictícias controladas pelo responsável, em homologação: cadastro, recebimento na caixa de entrada, confirmação, login, reenvio com intervalo, link expirado, recuperação em outro navegador e login de uma conta que antes usava Google. Para essa última, a recuperação permite definir senha sem depender de OAuth. Teste também que o convite chega ao espaço correto após confirmar o email.
 
-Esse roteiro envolve recebimento e acesso humanos reais. Testes locais com respostas simuladas não comprovam entrega, reputação ou limites do serviço. O SMTP Brevo e o remetente correto estão salvos, e o provedor registrou a entrega do teste real. O aceite completo permanece pendente até o responsável confirmar o recebimento e a abertura de um link válido. As duas identidades sintéticas usadas nos testes de API foram confirmadas administrativamente apenas para QA: esses testes não validam entrega de email.
+Esse roteiro envolve recebimento e acesso humanos reais. Testes locais com respostas simuladas não comprovam entrega, reputação ou limites do serviço. O SMTP Brevo e o remetente correto estão salvos; o provedor registrou a entrega do teste real e o responsável confirmou o recebimento. A abertura do link e a conclusão da recuperação permanecem pendentes para o aceite completo desse fluxo. As duas identidades sintéticas usadas nos testes de API foram confirmadas administrativamente apenas para QA: esses testes não validam entrega de email.
