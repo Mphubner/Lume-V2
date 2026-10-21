@@ -17,6 +17,7 @@ class ApiService {
 
   async request(endpoint, options = {}) {
     const { invalidate = true, ...fetchOptions } = options;
+    const publicCatalog = /^\/plans(?:\?|$)/.test(endpoint) && (!options.method || options.method === 'GET');
     const requestUrl = new URL(`${API_URL}${endpoint}`, window.location.origin);
     const contextual = /^\/(dashboard|notifications|audit|accounts|transactions|categories|recurring|debts|goals|budgets|health|reserve|ai|import)(\/|\?|$)/.test(endpoint) || endpoint.startsWith('/profile/export') || endpoint.startsWith('/profile/onboarding');
     if (contextual && !requestUrl.searchParams.has('workspace')) requestUrl.searchParams.set('workspace', this.workspace);
@@ -25,7 +26,7 @@ class ApiService {
     const sessionId = this.sessionId;
     const headers = {
       'Content-Type': 'application/json',
-      ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      ...(!publicCatalog && this.token && { Authorization: `Bearer ${this.token}` }),
       ...options.headers,
     };
 
@@ -48,7 +49,7 @@ class ApiService {
       this._offline = false;
       this._offlineWarned = false;
       const data = await response.json();
-      if (sessionId !== this.sessionId || (contextual && workspace !== this.workspace)) throw new Error('Sessão alterada; solicitação descartada.');
+      if ((!publicCatalog && sessionId !== this.sessionId) || (contextual && workspace !== this.workspace)) throw new Error('Sessão alterada; solicitação descartada.');
       if (invalidate && options.method && options.method !== 'GET') await queryClient.invalidateQueries();
       return data;
     } catch (err) {

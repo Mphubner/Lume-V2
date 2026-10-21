@@ -20,6 +20,22 @@ describe('API: escopo, identidade e erros verificáveis', () => {
     await api.request('/plans'); await api.request('/payments/create-subscription', { method: 'POST', body: { planId: 'pilot', idempotencyKey: 'key' } });
     expect(fetch.mock.calls.every(([url]) => !new URL(url).searchParams.has('workspace'))).toBe(true);
   });
+  it('carrega o catálogo público durante a restauração da sessão sem transmitir o token', async () => {
+    let complete;
+    fetch.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const pending = api.request('/plans');
+    api.sessionId = 'restored-session'; api.workspace = 'family-B';
+    complete(response({ plans: [], billing_enabled: false }));
+    await expect(pending).resolves.toEqual({ plans: [], billing_enabled: false });
+    expect(fetch.mock.calls[0][1].headers.Authorization).toBeUndefined();
+  });
+  it.each(['/profile', '/payments/subscription', '/admin/plans'])('mantém proteção de identidade também fora do escopo financeiro em %s', async endpoint => {
+    let complete;
+    fetch.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const pending = api.request(endpoint); api.sessionId = 'other-session';
+    complete(response({ private: true }));
+    await expect(pending).rejects.toThrow('Sessão alterada');
+  });
   it.each(['session', 'workspace'])('descarta resposta atrasada após alteração de %s', async change => {
     let complete;
     fetch.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
