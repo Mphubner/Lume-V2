@@ -6,7 +6,7 @@ import { calculateFinancialPlan } from '../domain/planner.js';
 
 dotenv.config();
 const providers = {
-  groq: { base: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+  groq: { base: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-20b' },
   together: { base: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
   huggingface: { base: 'https://router.huggingface.co/v1', model: 'meta-llama/Llama-3.3-70B-Instruct' },
 };
@@ -128,13 +128,18 @@ async function requestProvider(provider, apiKey, messages, options, signal) {
   const config = providers[provider];
   if (!gemini && !config) return { content: null, error: 'unsupported_provider' };
   const model = options.model ?? (gemini ? env.AI_MODEL_GEMINI || 'gemini-2.5-flash' : env.AI_MODEL || config.model);
+  const groqReasoning = provider === 'groq' && /^openai\/gpt-oss-(20b|120b)$/.test(model);
   const url = gemini ? 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent'
     : config.base + '/chat/completions';
   const body = gemini ? {
     systemInstruction: { parts: [{ text: messages.filter(message => message.role === 'system').map(message => message.content).join('\n') }] },
     contents: messages.filter(message => message.role !== 'system').map(message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] })),
     generationConfig: { temperature: options.temperature ?? 0.1, maxOutputTokens: options.maxTokens ?? 1200, ...(options.json ? { responseMimeType: 'application/json' } : {}) },
-  } : { model, messages, temperature: options.temperature ?? 0.1, max_tokens: options.maxTokens ?? 1200,
+  } : { model, messages, temperature: options.temperature ?? 0.1,
+    // Reasoning consumes the completion budget too. The short 100/300-token
+    // classification requests otherwise truncate before returning valid JSON.
+    ...(groqReasoning ? { max_completion_tokens: Math.max(1200, options.maxTokens ?? 1200), reasoning_effort: 'low', include_reasoning: false }
+      : { max_tokens: options.maxTokens ?? 1200 }),
     ...(options.json ? { response_format: { type: 'json_object' } } : {}) };
   const response = await (options.fetchImpl ?? fetch)(url, { method: 'POST', signal,
     headers: { 'Content-Type': 'application/json', ...(gemini ? { 'x-goog-api-key': apiKey } : { Authorization: 'Bearer ' + apiKey }) },

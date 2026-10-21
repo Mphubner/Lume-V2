@@ -42,7 +42,9 @@ Configuração oficial: [build do Cloudflare Pages](https://developers.cloudflar
 
 ## Provedor de IA
 
-O provedor existente é Groq, distinto de xAI/Grok. O servidor aceita `GROQ_API_KEYS` em CSV ou array JSON, além de `GROQ_API_KEY` e da variável legada `AI_API_KEY`, sem repetir chaves iguais. Use `AI_ENABLED=true`, `AI_PROVIDER=groq` e um `AI_MODEL` disponível na organização. Segredos ficam somente no ambiente do backend. Confirme a disponibilidade real do modelo e a resposta antes de apresentar o provedor como validado.
+O provedor existente é Groq, distinto de xAI/Grok. O servidor aceita `GROQ_API_KEYS` em CSV ou array JSON, além de `GROQ_API_KEY` e da variável legada `AI_API_KEY`, sem repetir chaves iguais. Use `AI_ENABLED=true`, `AI_PROVIDER=groq` e `AI_MODEL=openai/gpt-oss-20b`, validado em chamadas reais com contexto sintético em 21/10/2026. O antigo `llama-3.3-70b-versatile` respondeu 404 e não constava nos modelos disponíveis da organização. Segredos ficam somente no ambiente do backend. A disponibilidade futura continua dependente do provedor.
+
+As tarefas curtas em GPT-OSS reservam pelo menos 1.200 tokens de conclusão, incluindo o raciocínio, e usam esforço baixo com raciocínio omitido da resposta. Os limites antigos de 100/300 tokens podem truncar o JSON antes da resposta final. A apresentação do planejador foi validada com o orçamento padrão do serviço; os valores continuam calculados pelo domínio determinístico. Referência: [raciocínio no Groq](https://console.groq.com/docs/reasoning).
 
 Credenciais rejeitadas podem avançar para outra chave válida. Um limite de tokens compartilhado pela organização/projeto suspende as tentativas pelo prazo informado pelo provedor; várias chaves da mesma organização não multiplicam a franquia gratuita. Durante essa indisponibilidade, o planejador continua com cálculos e orientação determinísticos, identificando a limitação da apresentação por IA. [Limites oficiais do Groq](https://console.groq.com/docs/rate-limits).
 
