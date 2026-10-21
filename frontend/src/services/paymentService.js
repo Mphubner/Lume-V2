@@ -1,10 +1,10 @@
 import api from './api';
 
 class PaymentService {
-  async createSubscription(planId, paymentMethodId) {
+  async createSubscription(planId, paymentMethodId, billingCycle) {
     return api.request('/payments/create-subscription', {
       method: 'POST',
-      body: { planId, paymentMethodId, gateway: 'stripe' },
+      body: { planId, paymentMethodId, billingCycle, gateway: 'stripe' },
     });
   }
 

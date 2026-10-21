@@ -1,69 +1,63 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { supabase } from '../config/supabase.js';
 import { generateBudget } from '../services/aiService.js';
+import { getFinancialSnapshot, getFinancialContext, publicContext } from '../services/financialFacts.js';
+import { resolveScope, scopeQuery, requireRecordAccess, assertCategoryAccess, fetchAll, handleError } from '../services/access.js';
+import { nonnegativeMoney, scopedBody } from '../domain/schemas.js';
+import { addDays, dateOnly } from '../domain/financial.js';
+import { today } from '../domain/money.js';
+import { mutate } from '../services/mutations.js';
+import { enrichFinancialRows } from '../services/relations.js';
 
 const router = Router();
 router.use(authMiddleware);
-
+const monthSchema = z.object({ month: z.coerce.number().int().min(1).max(12), year: z.coerce.number().int().min(1900).max(2200) });
+const budgetSchema = monthSchema.extend({ category_id: z.string().uuid(), planned_amount: nonnegativeMoney }).strict();
+function periodFor(query) {
+  return monthSchema.parse({ month: query.month ?? Number(today().slice(5, 7)), year: query.year ?? Number(today().slice(0, 4)) });
+}
 router.get('/', async (req, res) => {
   try {
-    const { month, year } = req.query;
-    const m = month || new Date().getMonth() + 1;
-    const y = year || new Date().getFullYear();
-
-    const { data, error } = await supabase.from('budgets').select('*, categories(name, icon, color)').eq('user_id', req.user.id).eq('month', m).eq('year', y);
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao buscar orçamentos' });
-  }
+    const period = periodFor(req.query);
+    const scope = await resolveScope(supabase, req.user.id, req.query.workspace);
+    const rawRows = await fetchAll(() => scopeQuery(supabase.from('budgets').select('*'), scope)
+      .eq('month', period.month).eq('year', period.year).order('id'));
+    const rows = await enrichFinancialRows(supabase, rawRows, scope);
+    const targetStart = period.year + '-' + String(period.month).padStart(2, '0') + '-01';
+    const snapshot = targetStart <= today() ? await getFinancialSnapshot(supabase, req.user.id, period, { scope }) : null;
+    res.json(rows.map(row => ({ ...row,
+      spent_amount: snapshot && !row.relation_needs_review ? snapshot.byWorkspaceCategory.find(category => category.workspace_id === row.workspace_id && category.category_id === row.category_id)?.total ?? 0 : null,
+      coverage: snapshot?.coverage ?? null, basis: snapshot ? 'posted_reconciled' : 'future_period' })));
+  } catch (error) { handleError(res, error); }
 });
-
-// POST /api/budgets/generate — AI budget generation
 router.post('/generate', async (req, res) => {
   try {
-    const { month, year } = req.body;
-    // Get last 3 months of transactions
-    const threeMonthsAgo = new Date();
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-
-    const { data: transactions } = await supabase.from('transactions').select('amount, type, category_id, categories(name)').eq('user_id', req.user.id).gte('date', threeMonthsAgo.toISOString().split('T')[0]);
-    const { data: goals } = await supabase.from('goals').select('*').eq('user_id', req.user.id).eq('status', 'active');
-
-    const historicalData = {};
-    transactions?.filter(t => t.type === 'expense').forEach(t => {
-      const cat = t.categories?.name || 'Outros';
-      if (!historicalData[cat]) historicalData[cat] = [];
-      historicalData[cat].push(Math.abs(parseFloat(t.amount)));
-    });
-
-    const budget = await generateBudget(historicalData, goals);
-    res.json(budget);
-  } catch (err) {
-    console.error('Budget generation error:', err);
-    res.status(500).json({ error: 'Erro ao gerar orçamento' });
-  }
+    const { workspace, fields } = scopedBody(req.body);
+    const target = periodFor(fields);
+    const targetStart = target.year + '-' + String(target.month).padStart(2, '0') + '-01';
+    const cursor = new Date(targetStart + 'T12:00:00Z');
+    cursor.setUTCMonth(cursor.getUTCMonth() - 3);
+    const context = await getFinancialContext(supabase, req.user.id, { workspace: workspace ?? req.query.workspace,
+      start_date: dateOnly(cursor), end_date: addDays(targetStart, -1) });
+    res.json({ ...publicContext(context), ...await generateBudget(context), target });
+  } catch (error) { handleError(res, error); }
 });
-
 router.post('/', async (req, res) => {
   try {
-    const { data, error } = await supabase.from('budgets').insert({ ...req.body, user_id: req.user.id }).select().single();
-    if (error) throw error;
-    res.status(201).json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao criar orçamento' });
-  }
+    const { workspace, fields } = scopedBody(req.body);
+    const scope = await resolveScope(supabase, req.user.id, workspace ?? req.query.workspace, 'write');
+    const payload = budgetSchema.parse(fields);
+    await assertCategoryAccess(supabase, payload.category_id, req.user.id, scope.id);
+    res.status(201).json(await mutate(supabase, req.user.id, 'budgets', 'insert', scope.id, payload));
+  } catch (error) { handleError(res, error); }
 });
-
 router.delete('/:id', async (req, res) => {
   try {
-    const { error } = await supabase.from('budgets').delete().eq('id', req.params.id).eq('user_id', req.user.id);
-    if (error) throw error;
+    const row = await requireRecordAccess(supabase, 'budgets', req.params.id, req.user.id, 'write');
+    await mutate(supabase, req.user.id, 'budgets', 'delete', row.workspace_id, {}, row.id);
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao excluir orçamento' });
-  }
+  } catch (error) { handleError(res, error); }
 });
-
 export default router;

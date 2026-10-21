@@ -7,4 +7,5 @@ export const supabase = supabaseUrl && supabaseAnonKey
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;
 
-export const isDemoMode = !supabase;
+// Enable this only after configuring and validating Google in Supabase and Google Cloud.
+export const googleAuthEnabled = Boolean(supabase) && import.meta.env.VITE_GOOGLE_AUTH_ENABLED === 'true';

@@ -1,244 +1,77 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { authMiddleware, adminMiddleware } from '../middleware/auth.js';
 import { supabase } from '../config/supabase.js';
-import { stripe, createProductAndPrice } from '../services/stripeService.js';
-
-const router = Router();
-router.use(authMiddleware);
-router.use(adminMiddleware);
-
-// GET /api/admin/kpis
-router.get('/kpis', async (req, res) => {
-  try {
-    const { data: profiles } = await supabase.from('profiles').select('plan, plan_status, created_at, granted_by');
-    
-    const users = profiles || [];
-    const paying = users.filter(u => u.plan_status === 'active' && !u.granted_by);
-    const trial = users.filter(u => u.plan_status === 'trial');
-    const free = users.filter(u => u.plan_status === 'inactive' || u.granted_by);
-    
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const newUsers = users.filter(u => new Date(u.created_at) >= sevenDaysAgo);
-
-    // Calculate MRR (simplified)
-    const planPrices = { individual: 19.90, family: 39.90 };
-    const mrr = paying.reduce((s, u) => s + (planPrices[u.plan] || 0), 0);
-
-    res.json({
-      mrr,
-      arr: mrr * 12,
-      payingUsers: paying.length,
-      trialUsers: trial.length,
-      freeUsers: free.length,
-      newUsersWeek: newUsers.length,
-      totalUsers: users.length,
-      conversionRate: users.length > 0 ? ((paying.length / users.length) * 100).toFixed(1) : 0,
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao buscar KPIs' });
-  }
-});
-
-// GET /api/admin/users
-router.get('/users', async (req, res) => {
-  try {
-    const { search } = req.query;
-    let query = supabase.from('profiles').select('*').order('created_at', { ascending: false });
-    if (search) query = query.or(`email.ilike.%${search}%,full_name.ilike.%${search}%`);
-    const { data, error } = await query;
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao buscar usuários' });
-  }
-});
-
-// POST /api/admin/grant-access
-router.post('/grant-access', async (req, res) => {
-  try {
-    const { user_id, plan } = req.body;
-    const { data, error } = await supabase.from('profiles').update({
-      plan: plan || 'family',
-      plan_status: 'granted',
-      plan_started_at: new Date().toISOString(),
-      granted_by: req.user.id,
-    }).eq('id', user_id).select().single();
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao conceder acesso' });
-  }
-});
-
-// GET/PUT /api/admin/settings
-router.get('/settings', async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('platform_settings').select('*');
-    if (error) throw error;
-    const settings = {};
-    data.forEach(s => { settings[s.key] = s.value; });
-    res.json(settings);
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao buscar configurações' });
-  }
-});
-
-router.put('/settings', async (req, res) => {
-  try {
-    const entries = Object.entries(req.body);
-    for (const [key, value] of entries) {
-      await supabase.from('platform_settings').upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
-    }
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao salvar configurações' });
-  }
-});
-
-// GET /api/admin/traffic
-router.get('/traffic', async (req, res) => {
-  try {
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    const { data, error } = await supabase.from('page_views').select('*').gte('created_at', thirtyDaysAgo.toISOString());
-    if (error) throw error;
-
-    const views = data || [];
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-    const last7 = views.filter(v => new Date(v.created_at) >= sevenDaysAgo);
-    const uniqueVisitors7 = new Set(last7.map(v => v.visitor_id)).size;
-    const uniqueVisitors30 = new Set(views.map(v => v.visitor_id)).size;
-
-    // Top pages
-    const pageCount = {};
-    views.forEach(v => { pageCount[v.page] = (pageCount[v.page] || 0) + 1; });
-
-    // Device breakdown
-    const deviceCount = { desktop: 0, mobile: 0, tablet: 0 };
-    views.forEach(v => { if (v.device_type) deviceCount[v.device_type]++; });
-
-    res.json({
-      last7Days: { views: last7.length, unique: uniqueVisitors7 },
-      last30Days: { views: views.length, unique: uniqueVisitors30 },
-      topPages: Object.entries(pageCount).sort((a, b) => b[1] - a[1]).map(([page, count]) => ({ page, count })),
-      devices: deviceCount,
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao buscar tráfego' });
-  }
-});
-
-// ──── PLANS CRUD ────
-
-// GET /api/admin/plans
-router.get('/plans', async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('plans').select('*').order('price', { ascending: true });
-    if (error) throw error;
-    res.json(data || []);
-  } catch (err) {
-    // Fallback defaults if table doesn't exist yet
-    res.json([
-      { id: 'free', name: 'Gratuito', price: 0, max_accounts: 1, max_transactions: 50, features: ['Categorias básicas', '1 conta'], is_active: true },
-      { id: 'individual', name: 'Individual', price: 19.90, max_accounts: 5, max_transactions: -1, features: ['Contas ilimitadas', 'IA completa', 'Importação'], is_active: true },
-      { id: 'family', name: 'Família', price: 39.90, max_accounts: 10, max_transactions: -1, features: ['Tudo do Individual', 'Até 5 membros', 'Relatórios familiares'], is_active: true },
-    ]);
-  }
-});
-
-// POST /api/admin/plans
-router.post('/plans', async (req, res) => {
-  try {
-    const { name, price, max_accounts, max_transactions, features, is_active } = req.body;
-    let newPlanId = name.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-    // Se houver config de stripe, criar nativamente na infra para obter o Price ID
-    if (stripe) {
-      try {
-        const { priceId } = await createProductAndPrice(name, parseFloat(price), 'month');
-        newPlanId = priceId; // price_1xxxxx
-      } catch (stripeErr) {
-        console.error('Stripe creation warning:', stripeErr);
-        // Continue fallback se for apenas erro de credencial
-      }
-    }
-
-    const { data, error } = await supabase.from('plans').insert({
-      id: newPlanId,
-      name, price: parseFloat(price), max_accounts: parseInt(max_accounts),
-      max_transactions: parseInt(max_transactions),
-      features: features || [], is_active: is_active !== false,
-    }).select().single();
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao criar plano: ' + err.message });
-  }
-});
-
-// PUT /api/admin/plans/:id
-router.put('/plans/:id', async (req, res) => {
-  try {
-    const { name, price, max_accounts, max_transactions, features, is_active } = req.body;
-    const updates = {};
-    if (name !== undefined) updates.name = name;
-    if (price !== undefined) updates.price = parseFloat(price);
-    if (max_accounts !== undefined) updates.max_accounts = parseInt(max_accounts);
-    if (max_transactions !== undefined) updates.max_transactions = parseInt(max_transactions);
-    if (features !== undefined) updates.features = features;
-    if (is_active !== undefined) updates.is_active = is_active;
-    updates.updated_at = new Date().toISOString();
-
-    const { data, error } = await supabase.from('plans').update(updates).eq('id', req.params.id).select().single();
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao atualizar plano: ' + err.message });
-  }
-});
-
-// DELETE /api/admin/plans/:id
-router.delete('/plans/:id', async (req, res) => {
-  try {
-    const { error } = await supabase.from('plans').delete().eq('id', req.params.id);
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao excluir plano: ' + err.message });
-  }
-});
-
-// GET /api/admin/users/:id  — rich subscriber detail
-router.get('/users/:id', async (req, res) => {
-  try {
-    const { data: profile, error } = await supabase.from('profiles').select('*').eq('id', req.params.id).single();
-    if (error) throw error;
-
-    // Get transaction count
-    const { count: txCount } = await supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('user_id', req.params.id);
-
-    // Get accounts
-    const { data: accounts } = await supabase.from('accounts').select('id, name, type, institution, balance').eq('user_id', req.params.id);
-
-    // Get recurring bills count
-    const { count: recurringCount } = await supabase.from('recurring_bills').select('*', { count: 'exact', head: true }).eq('user_id', req.params.id);
-
-    res.json({
-      ...profile,
-      stats: {
-        transactionCount: txCount || 0,
-        accountCount: (accounts || []).length,
-        recurringCount: recurringCount || 0,
-      },
-      accounts: accounts || [],
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao buscar detalhes do usuário' });
-  }
-});
-
+import { stripe } from '../services/stripeService.js';
+import { checked,handleError,fetchAll,assertUUID,HTTPError } from '../services/access.js';
+import { nonnegativeMoney } from '../domain/schemas.js';
+import { sumMoney,toCents } from '../domain/money.js';
+const router=Router();router.use(authMiddleware,adminMiddleware);
+const run=fn=>async(req,res)=>{try{await fn(req,res);}catch(e){handleError(res,e);}};
+router.get('/kpis',run(async(req,res)=>{
+ const users=await fetchAll(()=>supabase.from('profiles').select('id,plan,plan_status,created_at,granted_by').order('id'));
+ const subscriptions=await fetchAll(()=>supabase.from('subscriptions').select('id,user_id,plan_id,status').eq('status','active').order('id'));
+ const plans=checked(await supabase.from('plans').select('id,price,interval'));
+ const prices=new Map(plans.map(p=>[p.id,p.interval==='month'?Number(p.price):null]));
+ const paying=new Set(subscriptions.map(s=>s.user_id));
+ const mrr=sumMoney(subscriptions.map(s=>prices.get(s.plan_id)||0));
+ res.json({mrr,arr:mrr*12,mrrBasis:'active_subscriptions_current_catalog',mrrComplete:subscriptions.every(s=>prices.has(s.plan_id)),
+  payingUsers:paying.size,trialUsers:users.filter(u=>u.plan_status==='trial').length,
+  freeUsers:users.filter(u=>!paying.has(u.id)).length,newUsersWeek:users.filter(u=>Date.parse(u.created_at)>Date.now()-7*86400000).length,
+  totalUsers:users.length,conversionRate:users.length?100*paying.size/users.length:0});
+}));
+router.get('/users',run(async(req,res)=>{
+ const search=String(req.query.search||'').toLowerCase().slice(0,100);
+ const users=await fetchAll(()=>supabase.from('profiles').select('id,email,full_name,plan,plan_status,role,created_at,granted_by').order('id'));
+ res.json(users.filter(u=>!search||u.email?.toLowerCase().includes(search)||u.full_name?.toLowerCase().includes(search)));
+}));
+router.post('/grant-access',run(async(req,res)=>{
+ const body=z.object({user_id:z.string().uuid(),plan:z.string().min(1).max(100)}).strict().parse(req.body);
+ const plan=checked(await supabase.from('plans').select('id').eq('id',body.plan).eq('is_active',true).maybeSingle());
+ if(!plan)throw new HTTPError(400,'Plano indisponível.');
+ res.json(checked(await supabase.rpc('grant_pilot_access',{p_actor:req.user.id,p_user_id:body.user_id,p_plan:body.plan})));
+}));
+router.get('/settings',run(async(req,res)=>res.json({payment_gateway:'stripe',billing_enabled:process.env.BILLING_ENABLED==='true',
+ stripe_configured:Boolean(process.env.STRIPE_SECRET_KEY&&process.env.STRIPE_WEBHOOK_SECRET),
+ ai_enabled:process.env.AI_ENABLED==='true',ai_model:process.env.AI_MODEL||null,whatsapp_enabled:false,email_enabled:false,source:'environment'})));
+router.put('/settings',(_req,res)=>res.status(405).json({error:'Configure integrações nas variáveis da hospedagem. Segredos não são armazenados ou exibidos neste painel.'}));
+router.get('/traffic',run(async(req,res)=>{
+ const since=new Date(Date.now()-30*86400000).toISOString();
+ const views=await fetchAll(()=>supabase.from('page_views').select('id,page,device_type,visitor_id,created_at').gte('created_at',since).order('id'));
+ const week=views.filter(v=>Date.parse(v.created_at)>=Date.now()-7*86400000),pages={},devices={desktop:0,mobile:0,tablet:0};
+ for(const v of views){pages[v.page]=(pages[v.page]||0)+1;if(Object.hasOwn(devices,v.device_type))devices[v.device_type]++;}
+ res.json({last7Days:{views:week.length,unique:new Set(week.map(v=>v.visitor_id).filter(Boolean)).size},last30Days:{views:views.length,unique:new Set(views.map(v=>v.visitor_id).filter(Boolean)).size},topPages:Object.entries(pages).sort((a,b)=>b[1]-a[1]).map(([page,count])=>({page,count})),devices});
+}));
+const planSchema=z.object({id:z.string().regex(/^[a-z][a-z0-9_-]{1,79}$/),name:z.string().trim().min(1).max(100),price:nonnegativeMoney,
+ max_accounts:z.number().int().min(-1).max(10000).optional(),max_transactions:z.number().int().min(-1).max(1000000).optional(),
+ max_members:z.number().int().min(1).max(10).optional(),features:z.array(z.string().max(200)).max(30).optional(),is_active:z.boolean().optional(),
+ stripe_price_id:z.string().regex(/^price_[a-zA-Z0-9]+$/).nullable().optional()}).strict();
+async function verifyPrice(plan){
+ if(!plan.stripe_price_id)return;
+ if(!stripe)throw new HTTPError(503,'Configure Stripe antes de vincular preços.');
+ const price=await stripe.prices.retrieve(plan.stripe_price_id);
+ if(!price.active||price.currency!=='brl'||price.unit_amount!==toCents(plan.price)||price.recurring?.interval!=='month'||price.recurring?.interval_count!==1)throw new HTTPError(409,'Preço Stripe deve ser mensal em BRL e igual ao catálogo.');
+}
+router.get('/plans',run(async(req,res)=>res.json(checked(await supabase.from('plans').select('*').order('price')))));
+router.post('/plans',run(async(req,res)=>{
+ const plan=planSchema.parse(req.body);await verifyPrice(plan);
+ res.status(201).json(checked(await supabase.from('plans').insert({...plan,interval:'month'}).select().single()));
+}));
+router.put('/plans/:id',run(async(req,res)=>{
+ const patch=planSchema.omit({id:true}).partial().parse(req.body);
+ if(!Object.keys(patch).length)throw new HTTPError(400,'Informe os campos.');
+ const current=checked(await supabase.from('plans').select('*').eq('id',req.params.id).single());
+ await verifyPrice({...current,...patch});
+ res.json(checked(await supabase.from('plans').update({...patch,updated_at:new Date().toISOString()}).eq('id',current.id).select().single()));
+}));
+router.delete('/plans/:id',run(async(req,res)=>{
+ checked(await supabase.from('plans').update({is_active:false}).eq('id',req.params.id));res.json({success:true,archived:true});
+}));
+router.get('/users/:id',run(async(req,res)=>{
+ const id=assertUUID(req.params.id),profile=checked(await supabase.from('profiles').select('id,email,full_name,role,plan,plan_status,created_at').eq('id',id).single());
+ const tx=await supabase.from('transactions').select('id',{count:'exact',head:true}).eq('user_id',id);checked(tx);
+ const accounts=await supabase.from('accounts').select('id',{count:'exact',head:true}).eq('user_id',id);checked(accounts);
+ const bills=await supabase.from('recurring_bills').select('id',{count:'exact',head:true}).eq('user_id',id);checked(bills);
+ res.json({...profile,stats:{transactionCount:tx.count,accountCount:accounts.count,recurringCount:bills.count}});
+}));
 export default router;

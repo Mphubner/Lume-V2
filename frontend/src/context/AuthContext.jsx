@@ -1,169 +1,123 @@
-import { createContext, useContext, useState, useEffect } from 'react';
-import { supabase, isDemoMode } from '../services/supabase';
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { supabase, googleAuthEnabled } from '../services/supabase';
+import { authCallbackUrl, authLink, hasConfirmedEmail } from '../services/auth';
+import { queryClient } from '../services/queryClient';
 import api from '../services/api';
 
 const AuthContext = createContext(null);
-
-const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || '';
-
-const DEMO_USER = {
-  id: 'demo-user',
-  email: 'demo@lume.com',
-  user_metadata: { full_name: 'Marcos Pereira' },
-};
-
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (isDemoMode) {
-      setUser(DEMO_USER);
-      setProfile({
-        full_name: 'Marcos Pereira',
-        email: 'demo@lume.com',
-        role: 'admin',
-        plan: 'family',
-        plan_status: 'active',
-        onboarding_completed: true,
-      });
-      api.setToken('demo-token');
-      setLoading(false);
-      return;
-    }
-
-    // Get current session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        setUser(session.user);
-        api.setToken(session.access_token);
-        loadProfile();
-      }
-      setLoading(false);
-    });
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'PASSWORD_RECOVERY') {
-        // User clicked the reset password link — let ResetPasswordPage handle it
-        if (session) {
-          setUser(session.user);
-          api.setToken(session.access_token);
-        }
-        return;
-      }
-
-      if (session) {
-        setUser(session.user);
-        api.setToken(session.access_token);
-        loadProfile();
-      } else {
-        setUser(null);
-        setProfile(null);
-        api.setToken(null);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const loadProfile = async () => {
+  const [loading, setLoading] = useState(!!supabase);
+  const [authError, setAuthError] = useState(() => supabase ? null : new Error('Autenticação não configurada neste ambiente.'));
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const activeId = useRef(null);
+  const sessionRevision = useRef(0);
+  const profileRevision = useRef(0);
+  const loadProfile = useCallback(async () => {
+    const id = activeId.current;
+    if (!id || !api.token) return;
+    const requestSession = api.sessionId;
+    const revision = ++profileRevision.current;
     try {
       const data = await api.getProfile();
-      setProfile(data);
-    } catch (err) {
-      // Profile may not exist yet (first login before onboarding)
-      console.warn('Profile not loaded:', err.message);
-    }
-  };
-
-  // --- Auth Methods ---
-
-  // OAuth (Google, etc.)
-  const signIn = async (provider = 'google') => {
-    if (isDemoMode) return;
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: `${window.location.origin}/dashboard`,
-        scopes: provider === 'google' ? 'https://www.googleapis.com/auth/calendar.events' : undefined,
-      },
+      if (revision === profileRevision.current && id === activeId.current && requestSession === api.sessionId) { setProfile(data); setAuthError(null); }
+    } catch (error) { if (revision === profileRevision.current && id === activeId.current && requestSession === api.sessionId) setAuthError(error); }
+  }, []);
+  useEffect(() => {
+    if (!supabase) return;
+    let mounted = true;
+    const initialRevision = sessionRevision.current;
+    const applySession = async (session) => {
+      if (!mounted) return;
+      const revision = ++sessionRevision.current;
+      const confirmed = hasConfirmedEmail(session?.user);
+      const nextId = confirmed ? session.user.id : null;
+      if (nextId !== activeId.current) {
+        activeId.current = nextId;
+        api.sessionId = nextId ? `${nextId}:${crypto.randomUUID()}` : null;
+        api.workspace = 'all';
+        queryClient.clear();
+        setProfile(null);
+      }
+      api.setToken(confirmed ? session?.access_token || null : null);
+      setUser(confirmed ? session.user : null);
+      setAuthError(session && !confirmed ? Object.assign(new Error('Confirme seu email para entrar.'), { code: 'email_not_confirmed' }) : null);
+      setLoading(!!session && confirmed);
+      if (session && confirmed) await loadProfile();
+      if (mounted && revision === sessionRevision.current) setLoading(false);
+    };
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted || sessionRevision.current !== initialRevision) return;
+      if (error) { setAuthError(error); setLoading(false); }
+      else applySession(data.session);
+    }).catch((error) => {
+      if (mounted && sessionRevision.current === initialRevision) { setAuthError(error); setLoading(false); }
     });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') setIsPasswordRecovery(true);
+      if (!session) setIsPasswordRecovery(false);
+      void applySession(session);
+    });
+    return () => { mounted = false; subscription.unsubscribe(); };
+  }, [loadProfile]);
+  const requireAuth = () => { if (!supabase) throw Object.assign(new Error('Autenticação não configurada.'), { code: 'auth_not_configured' }); };
+  const signIn = async (provider = 'google', next = '/dashboard') => {
+    requireAuth();
+    if (provider !== 'google' || !googleAuthEnabled) throw Object.assign(new Error('Acesso com Google indisponível.'), { code: 'provider_disabled' });
+    const { error } = await supabase.auth.signInWithOAuth({ provider, options: { redirectTo: authCallbackUrl(next) } });
     if (error) throw error;
   };
-
-  // Email + Password login
   const signInWithEmail = async (email, password) => {
-    if (isDemoMode) return;
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    requireAuth();
+    const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    if (error) throw error;
+    if (!data?.session || !hasConfirmedEmail(data.user)) throw Object.assign(new Error('Confirme seu email para entrar.'), { code: 'email_not_confirmed' });
+    return data;
+  };
+  const signUp = async (email, password, fullName, next = '/dashboard') => {
+    requireAuth();
+    const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { full_name: fullName.trim() }, emailRedirectTo: authCallbackUrl(next) } });
+    if (error) throw error;
+    if (!data?.user) throw new Error('O cadastro não foi confirmado pelo serviço.');
+    if (data.session && hasConfirmedEmail(data.user)) return { ...data, status: 'authenticated' };
+    if (Array.isArray(data.user.identities) && data.user.identities.length === 0) return { ...data, status: 'existing_account' };
+    return { ...data, status: 'confirmation_required' };
+  };
+  const resendConfirmation = async (email, next = '/dashboard') => {
+    requireAuth();
+    const { data, error } = await supabase.auth.resend({ type: 'signup', email: email.trim(), options: { emailRedirectTo: authCallbackUrl(next) } });
     if (error) throw error;
     return data;
   };
-
-  // Email signup
-  const signUp = async (email, password, fullName) => {
-    if (isDemoMode) return;
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { full_name: fullName },
-        emailRedirectTo: `${window.location.origin}/login`,
-      },
-    });
-    if (error) throw error;
-    return data;
-  };
-
-  // Reset password (send email)
-  const resetPassword = async (email) => {
-    if (isDemoMode) return;
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/resetar-senha`,
-    });
+  const resetPassword = async (email, next = '/dashboard') => {
+    requireAuth();
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: authCallbackUrl(authLink('/resetar-senha', next)) });
     if (error) throw error;
   };
-
-  // Update password (after reset)
-  const updatePassword = async (newPassword) => {
-    if (isDemoMode) return;
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
+  const updatePassword = async (password) => {
+    requireAuth();
+    const { error } = await supabase.auth.updateUser({ password });
     if (error) throw error;
+    setIsPasswordRecovery(false);
   };
-
-  // Sign out
   const signOut = async () => {
-    if (isDemoMode) return;
-    await supabase.auth.signOut();
-    setUser(null);
-    setProfile(null);
+    sessionRevision.current += 1;
+    profileRevision.current += 1;
+    activeId.current = null;
+    api.sessionId = null;
+    api.setToken(null);
+    api.workspace = 'all';
+    queryClient.clear();
+    setUser(null); setProfile(null); setAuthError(null); setLoading(false); setIsPasswordRecovery(false);
+    if (supabase) { const { error } = await supabase.auth.signOut(); if (error) throw error; }
   };
-
-  const isAdmin = profile?.role === 'admin' || user?.email === ADMIN_EMAIL;
-
-  return (
-    <AuthContext.Provider value={{
-      user,
-      profile,
-      loading,
-      isAdmin,
-      isDemoMode,
-      signIn,
-      signInWithEmail,
-      signUp,
-      resetPassword,
-      updatePassword,
-      signOut,
-      refreshProfile: loadProfile,
-    }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={{ user, profile, loading, authError, authConfigured: Boolean(supabase), isAdmin: profile?.role === 'admin', isDemoMode: false, googleAuthEnabled, isPasswordRecovery, signIn, signInWithEmail, signUp, resendConfirmation, resetPassword, updatePassword, signOut, refreshProfile: loadProfile }}>{children}</AuthContext.Provider>;
 }
-
-export const useAuth = () => {
+// The hook shares the provider module to keep the authentication contract together.
+// eslint-disable-next-line react-refresh/only-export-components
+export function useAuth() {
   const context = useContext(AuthContext);
   if (!context) throw new Error('useAuth must be used within AuthProvider');
   return context;
-};
+}

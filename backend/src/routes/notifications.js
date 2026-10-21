@@ -1,60 +1,29 @@
 import { Router } from 'express';
 import { supabase } from '../config/supabase.js';
 import { authMiddleware } from '../middleware/auth.js';
-import * as emailService from '../services/emailService.js';
-import * as whatsappService from '../services/whatsappService.js';
-
-const router = Router();
-router.use(authMiddleware);
-
-// GET /api/notifications
-router.get('/', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_id', req.user.id)
-      .order('created_at', { ascending: false })
-      .limit(50);
-      
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    console.error('[NotificationsRoute] Erro 500:', err);
-    res.status(500).json({ error: 'Erro ao buscar notificações' });
-  }
-});
-
-// PUT /api/notifications/:id/read
-router.put('/:id/read', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { error } = await supabase
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('id', id)
-      .eq('user_id', req.user.id);
-      
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao marcar como lida' });
-  }
-});
-
-// POST /api/notifications/generate
-// This would typically be called by a cron job, but we expose it for testing or manual triggers
-router.post('/generate', async (req, res) => {
-  try {
-    // 1. Find bills due in 1-3 days
-    // 2. Insert into 'notifications' table
-    // 3. emailService.sendBillReminderEmail()
-    // 4. whatsappService.sendWhatsAppNotification()
-
-    res.json({ success: true, message: 'Processo de notificações automáticas rodado com sucesso' });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao gerar notificações' });
-  }
-});
-
+import { checked,handleError,resolveScope,scopeQuery,fetchAll,assertUUID } from '../services/access.js';
+import { occurrencesBetween } from '../domain/recurrence.js';
+import { today } from '../domain/money.js';
+import { addDays } from '../domain/financial.js';
+const router=Router();router.use(authMiddleware);
+router.get('/',async(req,res)=>{try{
+ const scope=await resolveScope(supabase,req.user.id,req.query.workspace);
+ const rows=checked(await scopeQuery(supabase.from('notifications').select('*').eq('user_id',req.user.id),scope).order('created_at',{ascending:false}).limit(50));
+ res.json(rows);
+}catch(e){handleError(res,e);}});
+router.put('/:id/read',async(req,res)=>{try{
+ const row=checked(await supabase.from('notifications').select('id,workspace_id').eq('id',assertUUID(req.params.id)).eq('user_id',req.user.id).single());
+ await resolveScope(supabase,req.user.id,row.workspace_id);
+ checked(await supabase.from('notifications').update({is_read:true}).eq('id',row.id).eq('user_id',req.user.id));
+ res.json({success:true});
+}catch(e){handleError(res,e);}});
+router.post('/generate',async(req,res)=>{try{
+ const scope=await resolveScope(supabase,req.user.id,req.body?.workspace||req.query.workspace);
+ const bills=await fetchAll(()=>scopeQuery(supabase.from('recurring_bills').select('*'),scope).eq('status','active').order('id'));
+ const settlements=await fetchAll(()=>scopeQuery(supabase.from('recurring_occurrences').select('*,transactions(*)'),scope).order('id'));
+ const start=today(),end=addDays(start,3);
+ const due=bills.flatMap(b=>occurrencesBetween(b,start,end,settlements,{asOf:start})).filter(o=>o.status!=='paid');
+ if(due.length)checked(await supabase.rpc('create_due_notifications',{p_user_id:req.user.id,p_occurrences:due.map(o=>({workspace_id:o.workspace_id,source_key:'due:'+o.recurring_id+':'+o.due_date,title:'Vencimento: '+o.name,message:'Valor previsto R$ '+o.amount.toFixed(2)+' em '+o.due_date+'. Confirme o pagamento na recorrência.'}))}));
+ res.json({success:true,channel:'in_app',evaluated:due.length,external_delivery:false});
+}catch(e){handleError(res,e);}});
 export default router;

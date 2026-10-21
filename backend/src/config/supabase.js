@@ -7,11 +7,11 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !supabaseServiceKey) {
-  console.warn('⚠️  Supabase credentials not configured. Running in demo mode.');
+  console.warn('Supabase não configurado: endpoints autenticados indisponíveis.');
 }
 
 export const supabase = supabaseUrl && supabaseServiceKey
-  ? createClient(supabaseUrl, supabaseServiceKey)
+  ? createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false, autoRefreshToken: false } })
   : null;
 
 export const getSupabaseClient = (accessToken) => {

@@ -1,225 +1,35 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../../services/api';
-import StatCard from '../../components/ui/StatCard';
-import InlineCategorySelect from '../../components/ui/InlineCategorySelect';
-import { formatCurrency } from '../../utils/format';
-import { useWorkspace } from '../../context/WorkspaceContext';
-import { Plus, Edit3, Trash2, Receipt, CheckCircle, Clock, AlertTriangle } from 'lucide-react';
-
-const RECURRENCE_LABELS = { weekly: 'Semanal', biweekly: 'Quinzenal', monthly: 'Mensal', quarterly: 'Trimestral', yearly: 'Anual' };
-
+import { formatCurrency, formatDate } from '../../utils/format';
+import { localToday } from '../../utils/finance';
+import DataError from '../../components/ui/DataError';
+import BottomSheet from '../../components/ui/BottomSheet';
+const EMPTY = { name: '', amount: '', due_day: 1, start_date: localToday(), recurrence: 'monthly', type: 'expense', status: 'active', adjust_to_business_day: false };
 export default function RecurringPage() {
-  const { currentWorkspace } = useWorkspace();
-  const [bills, setBills] = useState([]);
-  const [stats, setStats] = useState({ totalMonthly: 0, overdue: 0 });
-  const [loading, setLoading] = useState(false);
-  const [showModal, setShowModal] = useState(false);
-  const [editingBill, setEditingBill] = useState(null);
-  const [categories, setCategories] = useState([]);
-  const [form, setForm] = useState({
-    name: '', amount: '', due_day: '', category_id: '', recurrence: 'monthly', is_auto_debit: false, description: '', adjust_to_business_day: true, status: 'active',
-  });
-
-  useEffect(() => { loadBills(); loadCategories(); }, [currentWorkspace]);
-
-  const loadBills = async () => {
-    setLoading(true);
+  const [data, setData] = useState(null); const [error, setError] = useState(null); const [editing, setEditing] = useState(null); const [form, setForm] = useState(EMPTY); const [busy, setBusy] = useState(false);
+  const [payment, setPayment] = useState(null); const [candidates, setCandidates] = useState([]); const [transaction, setTransaction] = useState('');
+  const [month, setMonth] = useState(localToday().slice(0, 7));
+  const load = useCallback(async () => {
+    try { const [year, selectedMonth] = month.split('-'); setData(await api.request(`/recurring?year=${year}&month=${selectedMonth}`)); setError(null); } catch (e) { setError(e); }
+  }, [month]);
+  useEffect(() => { void load(); }, [load]);
+  const save = async event => { event.preventDefault(); setBusy(true); try { const payload = { ...form, amount: Number(form.amount), due_day: Number(form.due_day) }; if (editing === 'new') await api.createRecurringBill(payload); else await api.updateRecurringBill(editing, payload); setEditing(null); await load(); } catch (e) { setError(e); } finally { setBusy(false); } };
+  const choosePayment = async occurrence => {
+    setPayment(occurrence); setTransaction(''); setCandidates([]); setBusy(true);
     try {
-      const params = {};
-      if (currentWorkspace !== 'all') params.workspace = currentWorkspace;
-      const result = await api.getRecurringBills(params);
-      setBills(result.bills || []);
-      setStats(result.stats || stats);
-    } catch {
-      setBills([
-        { id: '1', name: 'Aluguel', amount: 1800, due_day: 5, categories: { name: 'Moradia', icon: '🏠', color: '#8b5cf6' }, recurrence: 'monthly', is_auto_debit: false, status: 'active' },
-        { id: '2', name: 'Energia', amount: 180, due_day: 10, categories: { name: 'Contas e Serviços', icon: '📋', color: '#64748b' }, recurrence: 'monthly', is_auto_debit: true, status: 'active' },
-        { id: '3', name: 'Internet', amount: 120, due_day: 15, categories: { name: 'Contas e Serviços', icon: '📋', color: '#64748b' }, recurrence: 'monthly', is_auto_debit: true, status: 'active' },
-        { id: '4', name: 'Streaming Netflix', amount: 44.90, due_day: 22, categories: { name: 'Lazer', icon: '🎮', color: '#ec4899' }, recurrence: 'monthly', is_auto_debit: true, status: 'active' },
-        { id: '5', name: 'Spotify', amount: 21.90, due_day: 22, categories: { name: 'Lazer', icon: '🎮', color: '#ec4899' }, recurrence: 'monthly', is_auto_debit: true, status: 'active' },
-        { id: '6', name: 'Academia', amount: 99, due_day: 1, categories: { name: 'Saúde', icon: '💊', color: '#ef4444' }, recurrence: 'monthly', is_auto_debit: false, status: 'active' },
-        { id: '7', name: 'Seguro Carro', amount: 350, due_day: 20, categories: { name: 'Transporte', icon: '🚗', color: '#3b82f6' }, recurrence: 'monthly', is_auto_debit: false, status: 'active' },
-      ]);
-      setStats({ totalMonthly: 2615.80, overdue: 0 });
-    } finally { setLoading(false); }
+      const all = [];
+      let page = 1; let totalPages = 1;
+      do { const result = await api.getTransactions({ page, limit: 500, type: occurrence.type }); all.push(...result.transactions); totalPages = result.totalPages; page++; } while (page <= totalPages);
+      setCandidates(all.filter(tx => !tx.recurring_occurrence_id && tx.workspace_id === occurrence.workspace_id && Math.round(Number(tx.amount) * 100) === Math.round(Number(occurrence.amount) * (occurrence.type === 'income' ? 100 : -100)) && tx.economic_kind === 'standard'));
+    } catch (e) { setError(e); } finally { setBusy(false); }
   };
-
-  const loadCategories = async () => {
-    try { const result = await api.getCategories(); setCategories(result || []); } catch {}
-  };
-
-  const currentDay = new Date().getDate();
-  const activeBills = bills.filter(b => b.status === 'active');
-  const paidBills = activeBills.filter(b => b.due_day < currentDay);
-  const dueSoon = activeBills.filter(b => b.due_day >= currentDay && b.due_day <= currentDay + 7);
-  const pending = activeBills.filter(b => b.due_day >= currentDay);
-
-  const openCreate = () => {
-    setEditingBill(null);
-    setForm({ name: '', amount: '', due_day: '', category_id: '', recurrence: 'monthly', is_auto_debit: false, description: '', adjust_to_business_day: true, status: 'active' });
-    setShowModal(true);
-  };
-  const openEdit = (bill) => {
-    setEditingBill(bill);
-    setForm({ name: bill.name, amount: String(bill.amount), due_day: String(bill.due_day), category_id: bill.category_id || '', recurrence: bill.recurrence, is_auto_debit: bill.is_auto_debit, description: bill.description || '', adjust_to_business_day: bill.adjust_to_business_day ?? true, status: bill.status });
-    setShowModal(true);
-  };
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      const data = { ...form, amount: parseFloat(form.amount), due_day: parseInt(form.due_day) };
-      if (editingBill) await api.updateRecurringBill(editingBill.id, data);
-      else await api.createRecurringBill(data);
-      setShowModal(false); loadBills();
-    } catch (err) { alert('Erro: ' + err.message); }
-  };
-  const handleDelete = async (id) => {
-    if (!confirm('Excluir esta conta?')) return;
-    try { await api.deleteRecurringBill(id); loadBills(); } catch {}
-  };
-  const toggleStatus = async (bill) => {
-    try { await api.updateRecurringBill(bill.id, { status: bill.status === 'active' ? 'inactive' : 'active' }); loadBills(); } catch {}
-  };
-
-  const getDueStatus = (dueDay) => {
-    if (dueDay < currentDay) return { label: 'Vencida', color: 'var(--color-success)', icon: <CheckCircle size={14} /> };
-    if (dueDay <= currentDay + 3) return { label: 'Vence em breve', color: 'var(--color-warning)', icon: <AlertTriangle size={14} /> };
-    return { label: `Dia ${dueDay}`, color: 'var(--text-muted)', icon: <Clock size={14} /> };
-  };
-
-  return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
-        <div className="page-header" style={{ marginBottom: 0 }}><h1>Contas Fixas do Mês</h1><p>Controle suas despesas recorrentes e não perca prazos</p></div>
-        <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Nova Conta Fixa</button>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-4" style={{ marginBottom: '1.5rem' }}>
-        <StatCard label="Total Mensal" value={formatCurrency(activeBills.reduce((s, b) => s + parseFloat(b.amount), 0))} variant="balance" />
-        <StatCard label="Pagas Este Mês" value={`${paidBills.length} / ${activeBills.length}`} sub={formatCurrency(paidBills.reduce((s, b) => s + parseFloat(b.amount), 0))} variant="income" />
-        <StatCard label="Pendentes" value={String(pending.length)} sub={formatCurrency(pending.reduce((s, b) => s + parseFloat(b.amount), 0))} variant="savings" />
-        <StatCard label="Vencem em 7 dias" value={String(dueSoon.length)} sub={dueSoon.length > 0 ? '⚠️ Atenção!' : '✅ Tudo OK'} variant={dueSoon.length > 0 ? 'expense' : 'neutral'} />
-      </div>
-
-      {loading ? (
-        <div className="loading-spinner"><div className="spinner" /></div>
-      ) : bills.length === 0 ? (
-        <div className="card"><div className="empty-state">
-          <div className="empty-state-icon"><Receipt size={48} /></div>
-          <h3>Nenhuma conta fixa cadastrada</h3>
-          <p>Cadastre aluguel, energia, internet, streaming e outras contas fixas</p>
-          <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Adicionar</button>
-        </div></div>
-      ) : (
-        <div className="card">
-          <table className="data-table">
-            <thead><tr>
-              <th>Conta</th><th>Categoria</th><th>Vencimento</th><th>Recorrência</th><th>Valor</th><th>Status</th><th>Ações</th>
-            </tr></thead>
-            <tbody>
-              {activeBills.sort((a, b) => a.due_day - b.due_day).map(bill => {
-                const dueStatus = getDueStatus(bill.due_day);
-                return (
-                  <tr key={bill.id}>
-                    <td>
-                      <div style={{ fontWeight: 600 }}>{bill.name}</div>
-                      {bill.is_auto_debit && <span style={{ fontSize: '0.7rem', color: 'var(--accent-gold)' }}>🔄 Débito automático</span>}
-                    </td>
-                    <td><span style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>{bill.categories?.icon} {bill.categories?.name || '-'}</span></td>
-                    <td>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', color: dueStatus.color }}>
-                        {dueStatus.icon} Dia {bill.due_day}
-                      </span>
-                    </td>
-                    <td style={{ fontSize: '0.8rem' }}>{RECURRENCE_LABELS[bill.recurrence] || bill.recurrence}</td>
-                    <td style={{ fontWeight: 700 }}>{formatCurrency(bill.amount)}</td>
-                    <td>
-                      <button onClick={() => toggleStatus(bill)} style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}>
-                        <span className={`badge ${bill.status === 'active' ? 'badge-success' : 'badge-info'}`}>
-                          {bill.status === 'active' ? '✅ Ativa' : '⏸️ Pausa'}
-                        </span>
-                      </button>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '0.25rem' }}>
-                        <button className="btn-icon" onClick={() => openEdit(bill)}><Edit3 size={14} /></button>
-                        <button className="btn-icon" onClick={() => handleDelete(bill.id)}><Trash2 size={14} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Modal */}
-      {showModal && (
-        <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{editingBill ? '✏️ Editar Conta Fixa' : '📋 Nova Conta Fixa'}</h2>
-              <button onClick={() => setShowModal(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '1.25rem' }}>✕</button>
-            </div>
-            <form onSubmit={handleSubmit}>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label>Nome *</label>
-                  <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Aluguel, Energia, Spotify..." required />
-                </div>
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>Valor Mensal *</label>
-                    <input type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} placeholder="350.00" required />
-                  </div>
-                  <div className="form-group">
-                    <label>Dia do Vencimento *</label>
-                    <input type="number" min="1" max="31" value={form.due_day} onChange={e => setForm({ ...form, due_day: e.target.value })} placeholder="10" required />
-                  </div>
-                </div>
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>Categoria</label>
-                    <InlineCategorySelect 
-                      categories={categories}
-                      value={form.category_id}
-                      onChange={(val) => setForm({ ...form, category_id: val })}
-                      typeFilter="expense"
-                      onCategoryCreated={loadCategories}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Recorrência</label>
-                    <select value={form.recurrence} onChange={e => setForm({ ...form, recurrence: e.target.value })}>
-                      {Object.entries(RECURRENCE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div className="form-group">
-                  <label>Descrição (opcional)</label>
-                  <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Notas adicionais..." />
-                </div>
-                <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.5rem' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
-                    <input type="checkbox" checked={form.is_auto_debit} onChange={e => setForm({ ...form, is_auto_debit: e.target.checked })} />
-                    🔄 Débito automático
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
-                    <input type="checkbox" checked={form.adjust_to_business_day} onChange={e => setForm({ ...form, adjust_to_business_day: e.target.checked })} />
-                    📅 Ajustar para dia útil
-                  </label>
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancelar</button>
-                <button type="submit" className="btn btn-primary">💾 Salvar</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  const confirmPayment = async event => { event.preventDefault(); setBusy(true); try { await api.request(`/recurring/${payment.recurring_id}/confirm`, { method: 'POST', body: { due_date: payment.due_date, transaction_id: transaction } }); setPayment(null); await load(); } catch (e) { setError(e); } finally { setBusy(false); } };
+  return <div><div className="page-header"><h1>Contas e compromissos recorrentes</h1><p>Uma conta vencida permanece pendente até vincular um lançamento real. Datas previstas não comprovam pagamento.</p></div>
+    {error && <DataError error={error} onRetry={load} />}
+    <label>Mês de referência<input type="month" required value={month} onChange={e => setMonth(e.target.value)} /></label><button className="btn btn-primary" onClick={() => { setEditing('new'); setForm({ ...EMPTY, start_date: localToday() }); }}>Nova recorrência</button>
+    {!data ? <p role="status">Carregando compromissos…</p> : <><p className="card">{data.stats?.paidThisMonth || 0} pagamentos vinculados · {data.stats?.pending || 0} pendentes · {data.stats?.overdue || 0} vencidos.{data.coverage?.incompleteSchedules > 0 && ` ${data.coverage.incompleteSchedules} cadastros precisam de data inicial.`}</p><h2>Ocorrências do mês</h2><div className="table-responsive"><table className="data-table"><thead><tr><th>Conta</th><th>Vencimento</th><th>Valor</th><th>Estado</th><th>Ação</th></tr></thead><tbody>{data.occurrences.map(item => <tr key={item.id}><td>{item.name}</td><td>{formatDate(item.due_date)}</td><td>{formatCurrency(item.amount)}</td><td>{item.status === 'paid' ? 'Pago com lançamento vinculado' : item.status === 'overdue' ? 'Vencida' : 'Prevista'}</td><td>{item.status === 'paid' && <button className="btn btn-secondary" disabled={busy} onClick={async () => { if (!confirm('Desvincular o pagamento desta ocorrência? O lançamento bancário será preservado.')) return; setBusy(true); try { await api.request(`/recurring/${item.recurring_id}/occurrences/${item.due_date}`, { method: 'DELETE' }); await load(); } catch (e) { setError(e); } finally { setBusy(false); } }}>Desvincular pagamento</button>}{item.status !== 'paid' && <button className="btn btn-secondary" onClick={() => choosePayment(item)}>Vincular pagamento</button>}</td></tr>)}</tbody></table></div><h2>Cadastros</h2>{data.bills.map(bill => <div className="card" key={bill.id}><strong>{bill.name}</strong> · {formatCurrency(bill.amount)} · {bill.recurrence} · {bill.status}<p>{bill.schedule_complete ? `Início em ${formatDate(bill.start_date)}` : 'Sem data inicial: agenda não calculada.'}</p><button onClick={() => { setEditing(bill.id); setForm(Object.fromEntries(Object.keys(EMPTY).map(key => [key, bill[key] ?? EMPTY[key]]))); }}>Editar</button> <button onClick={async () => { if (!confirm('Remover este cadastro de recorrência?')) return; try { await api.deleteRecurringBill(bill.id); await load(); } catch (e) { setError(e); } }}>Remover</button></div>)}</>}
+    <BottomSheet isOpen={!!editing} onClose={() => setEditing(null)} title="Cadastro de recorrência"><form onSubmit={save}><label>Nome<input required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label><label>Valor (R$)<input type="number" step="0.01" min="0.01" required value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></label><label>Data inicial<input type="date" required value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })} /></label><label>Dia de vencimento<input type="number" min="1" max="31" required value={form.due_day} onChange={e => setForm({ ...form, due_day: e.target.value })} /></label><label>Frequência<select value={form.recurrence} onChange={e => setForm({ ...form, recurrence: e.target.value })}><option value="weekly">Semanal</option><option value="biweekly">Quinzenal</option><option value="monthly">Mensal</option><option value="quarterly">Trimestral</option><option value="yearly">Anual</option></select></label><label>Natureza<select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}><option value="expense">Despesa</option><option value="income">Receita</option></select></label><label>Estado<select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}><option value="active">Ativa</option><option value="inactive">Pausada</option></select></label><label><input type="checkbox" checked={form.adjust_to_business_day} onChange={e => setForm({ ...form, adjust_to_business_day: e.target.checked })} /> Ajustar fim de semana (feriados não cadastrados)</label><button className="btn btn-primary" disabled={busy}>Salvar cadastro</button></form></BottomSheet>
+    <BottomSheet isOpen={!!payment} onClose={() => setPayment(null)} title="Confirmar pagamento com evidência"><form onSubmit={confirmPayment}><p>Escolha o lançamento que corresponde a esta ocorrência. Ele precisa ter o mesmo valor, natureza e contexto.</p><label>Lançamento confirmado<select required value={transaction} onChange={e => setTransaction(e.target.value)}><option value="">Selecione…</option>{candidates.map(tx => <option key={tx.id} value={tx.id}>{formatDate(tx.date)} · {tx.description} · {formatCurrency(tx.amount)}</option>)}</select></label>{!candidates.length && <p>Nenhum lançamento compatível. <Link to="/lancamentos">Registre ou confira o pagamento primeiro.</Link></p>}<button className="btn btn-primary" disabled={busy || !transaction}>Confirmar vínculo</button></form></BottomSheet>
+  </div>;
 }

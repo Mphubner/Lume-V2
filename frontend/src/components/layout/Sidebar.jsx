@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import {
   LayoutDashboard, BarChart3, Target, Wallet, Shield, Building2, Heart,
   ArrowLeftRight, Receipt, FileText, Scale, Upload, Settings, LogOut,
-  Menu, ChevronDown, ChevronRight, Sun
+  Menu, ChevronDown, ChevronRight, Sun, ListChecks
 } from 'lucide-react';
 import NotificationBell from '../ui/NotificationBell';
 import WorkspaceSelector from './WorkspaceSelector';
@@ -16,6 +16,7 @@ const navGroups = [
     items: [
       { path: '/dashboard', label: 'Resumo Financeiro', icon: LayoutDashboard },
       { path: '/analytics', label: 'Análise Avançada', icon: BarChart3 },
+      { path: '/planejador', label: 'Planejador Financeiro', icon: ListChecks },
     ],
   },
   {
@@ -100,12 +101,12 @@ export default function Sidebar({ mobileOpen, onClose }) {
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Clareza financeira</div>
           </div>
         )}
-        <div style={{ 
-          marginLeft: collapsed ? '0' : 'auto', 
-          display: 'flex', 
+        <div style={{
+          marginLeft: collapsed ? '0' : 'auto',
+          display: 'flex',
           flexDirection: collapsed ? 'column' : 'row',
-          alignItems: 'center', 
-          gap: collapsed ? '1.5rem' : '0.5rem' 
+          alignItems: 'center',
+          gap: collapsed ? '1.5rem' : '0.5rem'
         }}>
           <NotificationBell isCollapsed={collapsed} />
           {/* Menu button hidden on mobile since Navbar handles it, but keeps collapse for Desktop */}
@@ -131,7 +132,7 @@ export default function Sidebar({ mobileOpen, onClose }) {
       <nav style={{ flex: 1, overflowY: 'auto', padding: '0.5rem', marginTop: '0.5rem' }}>
         {/* Admin link */}
         {isAdmin && (
-          <NavLink to="/admin" style={{
+          <NavLink onClick={onClose} to="/admin" style={{
             display: 'flex',
             alignItems: 'center',
             gap: '0.75rem',
@@ -178,7 +179,7 @@ export default function Sidebar({ mobileOpen, onClose }) {
 
             {/* Items */}
             {(expandedGroups[group.label] || collapsed) && group.items.map((item) => (
-              <NavLink key={item.path} to={item.path} style={{
+              <NavLink onClick={onClose} key={item.path} to={item.path} style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '0.75rem',
@@ -213,7 +214,7 @@ export default function Sidebar({ mobileOpen, onClose }) {
         borderTop: '1px solid var(--border-color)',
         padding: '0.75rem 1rem',
       }}>
-        <NavLink to="/configuracoes" style={{
+        <NavLink onClick={onClose} to="/configuracoes" style={{
           display: 'flex',
           alignItems: 'center',
           gap: '0.75rem',

@@ -1,3 +1,4 @@
+import DataError from '../../components/ui/DataError';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { formatCurrency } from '../../utils/format';
@@ -6,42 +7,43 @@ import Chart from 'react-apexcharts';
 
 export default function ReservePage() {
   const [reserve, setReserve] = useState({ current_amount: 0, target_amount: 0, monthly_income: 0 });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [showTarget, setShowTarget] = useState(false);
   const [targetForm, setTargetForm] = useState({ target_amount: '', monthly_income: '' });
   const [action, setAction] = useState(null); // 'add' | 'remove'
   const [amount, setAmount] = useState('');
-  const [history, setHistory] = useState([]);
+  const history = [];
 
   useEffect(() => {
     loadReserve();
   }, []);
 
   const loadReserve = async () => {
-    setLoading(true);
+    setLoading(true); setError(null);
     try {
       const result = await api.getReserve();
       if (result) setReserve(result);
-    } catch (err) { console.error('Error loading reserve', err); }
+    } catch (err) { setError(err); }
     setLoading(false);
   };
 
   const progressPct = reserve.target_amount > 0 ? Math.min(100, (reserve.current_amount / reserve.target_amount) * 100) : 0;
-  const monthsOfSafety = reserve.monthly_income > 0 ? (reserve.current_amount / reserve.monthly_income) : 0;
+  const monthsOfSafety = reserve.monthly_essential_expenses > 0 ? (reserve.current_amount / (reserve.monthly_essential_expenses || 0)) : 0;
   const remaining = Math.max(0, reserve.target_amount - reserve.current_amount);
   const monthlyNeeded = remaining > 0 && reserve.monthly_income > 0 ? (remaining / 12).toFixed(2) : 0;
 
-  const safetyLabel = monthsOfSafety >= 6 ? '🟢 Excelente' : monthsOfSafety >= 3 ? '🟡 Bom' : monthsOfSafety >= 1 ? '🟠 Iniciando' : '🔴 Sem reserva';
+  const safetyLabel = !reserve.monthly_essential_expenses ? 'Cobertura em meses indisponível: despesas essenciais não informadas' : monthsOfSafety >= 6 ? '🟢 Excelente' : monthsOfSafety >= 3 ? '🟡 Bom' : monthsOfSafety >= 1 ? '🟠 Iniciando' : '🔴 Sem reserva';
   const safetyColor = monthsOfSafety >= 6 ? 'var(--color-success)' : monthsOfSafety >= 3 ? 'var(--color-warning)' : 'var(--color-danger)';
 
   const handleContribute = async () => {
     const val = parseFloat(amount);
     if (!val || val <= 0) return;
-    const newAmount = action === 'add' ? reserve.current_amount + val : Math.max(0, reserve.current_amount - val);
-    
+    const newAmount = action === 'add' ? Number(reserve.current_amount) + val : Math.max(0, Number(reserve.current_amount) - val);
+
     try {
       setLoading(true);
-      const updated = await api.updateReserve({ ...reserve, current_amount: newAmount });
+      const updated = await api.updateReserve({ current_amount: newAmount });
       setReserve(updated);
       setAction(null);
       setAmount('');
@@ -54,7 +56,6 @@ export default function ReservePage() {
     try {
       setLoading(true);
       const updated = await api.updateReserve({
-        ...reserve,
         target_amount: parseFloat(targetForm.target_amount) || reserve.target_amount,
         monthly_income: parseFloat(targetForm.monthly_income) || reserve.monthly_income,
       });
@@ -64,8 +65,11 @@ export default function ReservePage() {
     finally { setLoading(false); }
   };
 
+  if (loading) return <p role="status">Carregando reserva declarada…</p>;
+  if (error) return <DataError error={error} onRetry={loadReserve} />;
   return (
     <div>
+      <p className="card" role="note">Reserva declarada para planejamento. Este valor não cria dinheiro nem comprova saldo disponível; confira a conta em que os recursos estão guardados.</p>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
         <div className="page-header" style={{ marginBottom: 0 }}>
           <h1>Reserva de Emergência</h1>
@@ -101,13 +105,13 @@ export default function ReservePage() {
           {action ? (
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <input type="number" step="0.01" placeholder="R$ 0,00" value={amount} onChange={e => setAmount(e.target.value)} style={{ width: 150 }} />
-              <button className="btn btn-primary btn-sm" onClick={handleContribute}>{action === 'add' ? 'Depositar' : 'Retirar'}</button>
+              <button className="btn btn-primary btn-sm" onClick={handleContribute}>{action === 'add' ? 'Acrescentar valor declarado' : 'Reduzir valor declarado'}</button>
               <button className="btn btn-ghost btn-sm" onClick={() => { setAction(null); setAmount(''); }}>✕</button>
             </div>
           ) : (
             <>
-              <button className="btn btn-primary" onClick={() => setAction('add')}><Plus size={16} /> Depositar</button>
-              <button className="btn btn-secondary" onClick={() => setAction('remove')}><Minus size={16} /> Retirar</button>
+              <button className="btn btn-primary" onClick={() => setAction('add')}><Plus size={16} /> Acrescentar valor declarado</button>
+              <button className="btn btn-secondary" onClick={() => setAction('remove')}><Minus size={16} /> Reduzir valor declarado</button>
             </>
           )}
         </div>
@@ -116,7 +120,7 @@ export default function ReservePage() {
         <div className="grid grid-3">
           <div style={{ textAlign: 'center', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 12 }}>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Meses de Segurança</div>
-            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: safetyColor }}>{monthsOfSafety.toFixed(1)}</div>
+            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: safetyColor }}>{reserve.monthly_essential_expenses > 0 ? monthsOfSafety.toFixed(1) : 'Não calculado'}</div>
             <div style={{ fontSize: '0.75rem', fontWeight: 600, color: safetyColor }}>{safetyLabel}</div>
           </div>
           <div style={{ textAlign: 'center', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 12 }}>
@@ -143,11 +147,11 @@ export default function ReservePage() {
               chart: { type: 'area', toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
               theme: { mode: 'dark' },
               colors: ['#d4a843'],
-              stroke: { curve: history.length >= 2 ? 'straight', width: 2 },
+              stroke: { curve: 'straight', width: 2 },
               dataLabels: { enabled: false },
               fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05, stops: [0, 90, 100] } },
               xaxis: { categories: history.map(h => h.month), labels: { style: { colors: '#94a3b8' } }, axisBorder: { show: false }, axisTicks: { show: false } },
-              yaxis: { 
+              yaxis: {
                 labels: { formatter: val => typeof val === 'number' ? formatCurrency(val, true) : val, style: { colors: '#94a3b8' } },
                 ...(history.length > 0 && Math.max(...history.map(h => Number(h.amount || 0))) === Math.min(...history.map(h => Number(h.amount || 0))) ? { min: Math.min(...history.map(h => Number(h.amount || 0))) - 1000, max: Math.max(...history.map(h => Number(h.amount || 0))) + 1000 } : {})
               },
@@ -194,7 +198,7 @@ export default function ReservePage() {
                   <input type="number" step="0.01" value={targetForm.target_amount} onChange={e => setTargetForm({ ...targetForm, target_amount: e.target.value })} placeholder="15000" />
                 </div>
                 <div className="form-group">
-                  <label>Renda Mensal (R$) — para calcular "meses de segurança"</label>
+                  <label>Renda mensal declarada (R$) — não mede cobertura de despesas</label>
                   <input type="number" step="0.01" value={targetForm.monthly_income} onChange={e => setTargetForm({ ...targetForm, monthly_income: e.target.value })} placeholder="5000" />
                 </div>
               </div>

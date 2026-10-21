@@ -1,31 +1,33 @@
--- =============================================================
--- Patch: Add multi-entity support (family + business)
--- Execute this in the Supabase SQL Editor
--- =============================================================
-
--- 1. Add 'type' column to families table (family or business)
-ALTER TABLE families ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'family';
-
--- 2. Add 'import_id' to transactions (for audit trail)
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS import_id UUID;
-
--- 3. Ensure existing families are labeled correctly
-UPDATE families SET type = 'family' WHERE type IS NULL;
-
--- 4. Create index for faster entity queries
-CREATE INDEX IF NOT EXISTS idx_families_type ON families(type);
-CREATE INDEX IF NOT EXISTS idx_families_owner_type ON families(owner_id, type);
-CREATE INDEX IF NOT EXISTS idx_transactions_import_id ON transactions(import_id);
-
--- 5. Fix existing invited members who are stuck in onboarding
--- This updates any user who is in family_members but whose profile
--- hasn't been marked as onboarding complete or granted
-UPDATE profiles
-SET onboarding_completed = true,
-    plan_status = 'granted',
-    plan = COALESCE(plan, 'family')
-WHERE id IN (
-  SELECT fm.user_id FROM family_members fm
-  WHERE fm.role != 'owner'
-)
-AND (onboarding_completed IS NULL OR onboarding_completed = false);
+-- Retired: retained as commented history only. Use backend/scripts/migrate.mjs.
+DO $$ BEGIN RAISE EXCEPTION 'Script legado desativado. Use migrações versionadas após backup.'; END $$;
+-- LEGACY: -- =============================================================
+-- LEGACY: -- Patch: Add multi-entity support (family + business)
+-- LEGACY: -- Execute this in the Supabase SQL Editor
+-- LEGACY: -- =============================================================
+-- LEGACY:
+-- LEGACY: -- 1. Add 'type' column to families table (family or business)
+-- LEGACY: ALTER TABLE families ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'family';
+-- LEGACY:
+-- LEGACY: -- 2. Add 'import_id' to transactions (for audit trail)
+-- LEGACY: ALTER TABLE transactions ADD COLUMN IF NOT EXISTS import_id UUID;
+-- LEGACY:
+-- LEGACY: -- 3. Ensure existing families are labeled correctly
+-- LEGACY: UPDATE families SET type = 'family' WHERE type IS NULL;
+-- LEGACY:
+-- LEGACY: -- 4. Create index for faster entity queries
+-- LEGACY: CREATE INDEX IF NOT EXISTS idx_families_type ON families(type);
+-- LEGACY: CREATE INDEX IF NOT EXISTS idx_families_owner_type ON families(owner_id, type);
+-- LEGACY: CREATE INDEX IF NOT EXISTS idx_transactions_import_id ON transactions(import_id);
+-- LEGACY:
+-- LEGACY: -- 5. Fix existing invited members who are stuck in onboarding
+-- LEGACY: -- This updates any user who is in family_members but whose profile
+-- LEGACY: -- hasn't been marked as onboarding complete or granted
+-- LEGACY: UPDATE profiles
+-- LEGACY: SET onboarding_completed = true,
+-- LEGACY:     plan_status = 'granted',
+-- LEGACY:     plan = COALESCE(plan, 'family')
+-- LEGACY: WHERE id IN (
+-- LEGACY:   SELECT fm.user_id FROM family_members fm
+-- LEGACY:   WHERE fm.role != 'owner'
+-- LEGACY: )
+-- LEGACY: AND (onboarding_completed IS NULL OR onboarding_completed = false);

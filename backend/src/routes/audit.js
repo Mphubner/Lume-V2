@@ -28,13 +28,13 @@ export default router;
 // Helper: call from other routes to log actions
 export async function logAudit(userId, action, details, icon = '📋') {
   try {
-    await supabase.from('audit_log').insert({
+    const { error } = await supabase.from('audit_log').insert({
       user_id: userId,
       action,
-      details,
-      icon,
+      details: { message: details, icon },
     });
+    if (error) throw error;
   } catch (err) {
-    console.error('Audit log error (non-critical):', err.message);
+    console.error(JSON.stringify({event:'audit_persistence_failed',action,code:err.code||'internal'}));
   }
 }

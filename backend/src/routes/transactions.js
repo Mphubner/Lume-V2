@@ -1,224 +1,86 @@
+import { mutate } from '../services/mutations.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
-import { validate } from '../middleware/validate.js';
 import { supabase } from '../config/supabase.js';
-import { logAudit } from './audit.js';
-
-const router = Router();
-
-// Mark the user's cached AI insights as stale whenever financial data changes
-async function flagInsightRecalc(userId) {
-  await supabase.from('profiles').update({ needs_insight_recalc: true }).eq('id', userId);
+import { transactionSchema,scopedBody,positiveMoney,date } from '../domain/schemas.js';
+import { resolveScope,scopeQuery,requireRecordAccess,assertCategoryAccess,checked,handleError,HTTPError } from '../services/access.js';
+import { getFinancialSnapshot } from '../services/financialFacts.js';
+import { enrichFinancialRows } from '../services/relations.js';
+export function createTransactionsRouter(db=supabase,auth=authMiddleware){
+ const router=Router();router.use(auth);
+ router.get('/',async(req,res)=>{try{
+  const scope=await resolveScope(db,req.user.id,req.query.workspace);
+  const page=z.coerce.number().int().min(1).parse(req.query.page||1),limit=z.coerce.number().int().min(1).max(500).parse(req.query.limit||100);
+  const sort=z.enum(['date','amount','description','created_at']).parse(req.query.sort||'date');
+  let q=scopeQuery(db.from('transactions').select('*',{count:'exact'}),scope).eq('ledger_status','posted').order(sort,{ascending:req.query.order==='asc'}).order('id');
+  if(req.query.status==='pending')q=q.eq('is_reconciled',false);else q=q.eq('is_reconciled',true);
+  if(req.query.month&&req.query.year){const m=z.coerce.number().int().min(1).max(12).parse(req.query.month),y=z.coerce.number().int().min(1900).max(2200).parse(req.query.year);q=q.gte('date',`${y}-${String(m).padStart(2,'0')}-01`).lte('date',new Date(Date.UTC(y,m,0)).toISOString().slice(0,10));}
+  for(const field of ['category_id','account_id','member_id','import_id'])if(req.query[field])q=q.eq(field,z.string().uuid().parse(req.query[field]));
+  if(req.query.type)q=q.eq('type',z.enum(['income','expense','transfer']).parse(req.query.type));
+  if(req.query.uncategorized==='true')q=q.is('category_id',null);
+  if(req.query.search)q=q.ilike('description',`%${String(req.query.search).slice(0,200).replace(/[%_]/g,'')}%`);
+  const {data,error,count}=await q.range((page-1)*limit,page*limit-1);if(error)throw error;
+  const rows=await enrichFinancialRows(db,data,scope,{accounts:true});
+  res.json(req.query.import_id?rows:{transactions:rows,total:count,page,totalPages:Math.ceil(count/limit)});
+ }catch(e){handleError(res,e);}});
+ router.get('/summary',async(req,res)=>{try{
+  const data=await getFinancialSnapshot(db,req.user.id,req.query);res.json({...data.stats,balance:data.stats.periodBalance,byCategory:data.byCategory,coverage:data.coverage,totalTransactions:data.coverage?.transactionCount});
+ }catch(e){handleError(res,e);}});
+ const transfer=z.object({source_account_id:z.string().uuid(),destination_account_id:z.string().uuid(),amount:positiveMoney,date,description:z.string().trim().min(1).max(255),fee_amount:positiveMoney.optional()}).strict();
+ router.post('/transfers',async(req,res)=>{try{
+  const {fields}=scopedBody(req.body);const p=transfer.parse(fields);
+  const source=await requireRecordAccess(db,'accounts',p.source_account_id,req.user.id,'write');const dest=await requireRecordAccess(db,'accounts',p.destination_account_id,req.user.id,'write');
+  if(source.workspace_id!==dest.workspace_id)throw new HTTPError(400,'Movimento entre entidades exige classificação explícita de aporte, retirada ou empréstimo em cada espaço.');
+  res.status(201).json(checked(await db.rpc('create_transfer',{p_actor:req.user.id,p_source:source.id,p_destination:dest.id,p_amount:p.amount,p_date:p.date,p_description:p.description,p_fee:p.fee_amount||0})));
+ }catch(e){handleError(res,e);}});
+ router.patch('/transfers/link',async(req,res)=>{try{
+  const {fields}=scopedBody(req.body);const p=z.object({source_transaction_id:z.string().uuid(),destination_transaction_id:z.string().uuid()}).strict().parse(fields);
+  res.json(checked(await db.rpc('link_transfer',{p_actor:req.user.id,p_source:p.source_transaction_id,p_destination:p.destination_transaction_id})));
+ }catch(e){handleError(res,e);}});
+ async function validated(payload,current,userId){
+  const effective={...current,...payload};const account=await requireRecordAccess(db,'accounts',effective.account_id,userId,'write');
+  if(current.workspace_id && current.workspace_id!==account.workspace_id)throw new HTTPError(403,'A conta precisa pertencer ao mesmo espaço.');
+  await assertCategoryAccess(db,effective.category_id,userId,account.workspace_id);
+  if(effective.member_id&&(!current.id||('member_id' in payload&&payload.member_id!==current.member_id))){const m=checked(await db.from('workspace_members').select('user_id').eq('workspace_id',account.workspace_id).eq('user_id',effective.member_id).maybeSingle());if(!m)throw new HTTPError(403,'Membro não pertence ao espaço.');}
+  if(effective.type==='transfer'||effective.economic_kind==='transfer'){
+   if(!current.linked_transaction_id)throw new HTTPError(400,'Use o pareamento para confirmar uma transferência.');
+   if(['amount','date','account_id','type','economic_kind'].some(k=>k in payload&&payload[k]!==current[k]))throw new HTTPError(409,'Uma transferência vinculada exige reversão do par antes de alterar valores.');
+  }
+  const kind=effective.economic_kind||'standard';
+  if(kind==='standard'&&((effective.type==='income'&&effective.amount<=0)||(effective.type==='expense'&&effective.amount>=0)))throw new HTTPError(400,'Sinal incompatível com o movimento.');
+  if(kind==='refund'){
+   if(!effective.reversal_of)throw new HTTPError(400,'Selecione o lançamento original do estorno.');
+   const original=await requireRecordAccess(db,'transactions',effective.reversal_of,userId,'write');
+   if(original.workspace_id!==account.workspace_id||original.account_id!==account.id)throw new HTTPError(403,'Estorno fora da conta original.');
+  }else if(effective.reversal_of)throw new HTTPError(400,'Referência de estorno exige natureza estorno.');
+  return account;
+ }
+ router.post('/',async(req,res)=>{try{
+  const {workspace,fields}=scopedBody(req.body);const payload=transactionSchema.parse(fields);const account=await validated(payload,{},req.user.id);
+  if(workspace&&workspace!==account.workspace_id)throw new HTTPError(403,'Conta e espaço incompatíveis.');
+  res.status(201).json(await mutate(db,req.user.id,'transactions','insert',account.workspace_id,payload));
+ }catch(e){handleError(res,e);}});
+ router.put('/:id',async(req,res)=>{try{
+  const {workspace,fields}=scopedBody(req.body);const payload=transactionSchema.partial().parse(fields);
+  if(!Object.keys(payload).length)throw new HTTPError(400,'Informe os campos a alterar.');
+  const row=await requireRecordAccess(db,'transactions',req.params.id,req.user.id,'write');
+  if(workspace&&workspace!==row.workspace_id)throw new HTTPError(403,'Espaço imutável.');
+  if(row.ledger_status!=='posted')throw new HTTPError(409,'Lançamento anulado não pode ser editado.');
+  await validated(payload,row,req.user.id);
+  res.json(await mutate(db,req.user.id,'transactions','update',row.workspace_id,payload,row.id));
+ }catch(e){handleError(res,e);}});
+ router.post('/:id/review',async(req,res)=>{try{
+  const {workspace,fields}=scopedBody(req.body);const payload=transactionSchema.parse(fields);
+  const row=await requireRecordAccess(db,'transactions',req.params.id,req.user.id,'write');
+  if(workspace&&workspace!==row.workspace_id)throw new HTTPError(403,'Espaço imutável.');
+  await validated(payload,row,req.user.id);
+  res.json(await mutate(db,req.user.id,'transactions','review',row.workspace_id,payload,row.id));
+ }catch(e){handleError(res,e);}});
+ router.delete('/:id',async(req,res)=>{try{
+  const row=await requireRecordAccess(db,'transactions',req.params.id,req.user.id,'write');
+  res.json(checked(await db.rpc('void_transaction',{p_actor:req.user.id,p_transaction:row.id})));
+ }catch(e){handleError(res,e);}});
+ return router;
 }
-
-router.use(authMiddleware);
-
-// GET /api/transactions?month=&year=&type=&category=&account=&member=&search=&page=&limit=&workspace=
-router.get('/', async (req, res) => {
-  try {
-    const { month, year, type, category_id, account_id, member_id, search, import_id, workspace, page = 1, limit = 100, sort = 'date', order = 'desc', uncategorized } = req.query;
-    
-    let query = supabase
-      .from('transactions')
-      .select('*, categories(name, icon, color), accounts(name, institution)', { count: 'exact' })
-      .eq('user_id', req.user.id)
-      .order(sort, { ascending: order === 'asc' });
-
-    // Filtro de status: apenas para a tela de reconciliação que solicita explicitamente
-    if (req.query.status === 'pending') {
-      query = query.eq('is_reconciled', false);
-    }
-
-    if (month && year) {
-      const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-      const endDate = new Date(year, month, 0).toISOString().split('T')[0];
-      query = query.gte('date', startDate).lte('date', endDate);
-    }
-    if (type) query = query.eq('type', type);
-    if (uncategorized === 'true') {
-      // Find "Outros" category
-      const { data: catOutros } = await supabase.from('categories').select('id').eq('name', 'Outros').limit(1).maybeSingle();
-      if (catOutros) {
-        query = query.or(`category_id.is.null,category_id.eq.${catOutros.id}`);
-      } else {
-        query = query.is('category_id', null);
-      }
-    } else if (category_id) {
-      query = query.eq('category_id', category_id);
-    }
-    if (account_id) query = query.eq('account_id', account_id);
-    if (member_id) query = query.eq('member_id', member_id);
-    if (import_id) query = query.eq('import_id', import_id);
-    if (search) query = query.ilike('description', `%${search}%`);
-
-    if (workspace === 'personal') {
-      query = query.eq('account_type', 'personal').is('family_id', null);
-    } else if (workspace === 'business') {
-      query = query.eq('account_type', 'business').is('family_id', null);
-    } else if (workspace === 'family') {
-      query = query.not('family_id', 'is', null);
-    }
-
-    const from = (page - 1) * limit;
-    query = query.range(from, from + parseInt(limit) - 1);
-
-    const { data, error, count } = await query;
-    if (error) throw error;
-
-    res.json(import_id ? data : { transactions: data, total: count, page: parseInt(page), totalPages: Math.ceil(count / limit) });
-  } catch (err) {
-    console.error('GET /transactions error:', err);
-    res.status(500).json({ error: 'Erro ao buscar transações' });
-  }
-});
-
-// GET /api/transactions/summary?month=&year=&workspace=
-router.get('/summary', async (req, res) => {
-  try {
-    const { month, year, workspace } = req.query;
-    let query = supabase.from('transactions').select('amount, type, date, is_internal_transfer, category_id, categories(name, icon, color, nature, group_name)').eq('user_id', req.user.id);
-
-    if (month && year) {
-      const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-      const endDate = new Date(year, month, 0).toISOString().split('T')[0];
-      query = query.gte('date', startDate).lte('date', endDate);
-    }
-
-    if (workspace === 'personal') {
-      query = query.eq('account_type', 'personal').is('family_id', null);
-    } else if (workspace === 'business') {
-      query = query.eq('account_type', 'business').is('family_id', null);
-    } else if (workspace === 'family') {
-      query = query.not('family_id', 'is', null);
-    }
-
-    const { data, error } = await query;
-    if (error) throw error;
-
-    const validData = data.filter(t => !t.is_internal_transfer && t.type !== 'transfer');
-    const income = validData.filter(t => t.type === 'income').reduce((s, t) => s + parseFloat(t.amount), 0);
-    const expenses = validData.filter(t => t.type === 'expense').reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
-    const transfers = data.filter(t => t.type === 'transfer' || t.is_internal_transfer).reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
-
-    // Group by category
-    const byCategory = {};
-    validData.filter(t => t.type === 'expense').forEach(t => {
-      const catName = t.categories?.name || 'Outros';
-      if (!byCategory[catName]) {
-        byCategory[catName] = { name: catName, icon: t.categories?.icon || '📦', color: t.categories?.color || '#94a3b8', total: 0, count: 0 };
-      }
-      byCategory[catName].total += Math.abs(parseFloat(t.amount));
-      byCategory[catName].count++;
-    });
-
-    res.json({
-      income, expenses, balance: income - expenses, transfers,
-      savingsRate: income > 0 ? ((income - expenses) / income * 100).toFixed(1) : 0,
-      byCategory: Object.values(byCategory).sort((a, b) => b.total - a.total),
-      totalTransactions: data.length,
-    });
-  } catch (err) {
-    console.error('GET /transactions/summary error:', err);
-    res.status(500).json({ error: 'Erro ao calcular resumo' });
-  }
-});
-
-const transactionSchema = z.object({
-  description: z.string().min(2, "A descrição deve ter ao menos 2 caracteres").max(255),
-  amount: z.number().or(z.string().transform(val => parseFloat(val))),
-  type: z.enum(['income', 'expense', 'transfer']),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Formato de data inválido (YYYY-MM-DD)"),
-  account_id: z.string().uuid().optional().nullable(),
-  category_id: z.string().uuid().optional().nullable(),
-  family_id: z.string().uuid().optional().nullable(),
-  account_type: z.enum(['personal', 'business']).optional(),
-  origin: z.enum(['manual', 'import', 'ai', 'recurring', 'whatsapp']).optional(),
-  is_internal_transfer: z.boolean().optional(),
-});
-
-// POST /api/transactions
-router.post('/', validate(transactionSchema), async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('transactions')
-      .insert({ ...req.body, user_id: req.user.id, is_reconciled: true })
-      .select()
-      .single();
-    if (error) throw error;
-    flagInsightRecalc(req.user.id);
-    logAudit(req.user.id, 'transaction_created', `Transação criada: ${req.body.description || 'sem descrição'}`, '➕');
-    res.status(201).json(data);
-  } catch (err) {
-    console.error('POST /transactions error:', err);
-    res.status(500).json({ error: 'Erro ao criar transação' });
-  }
-});
-
-// PUT /api/transactions/:id
-router.put('/:id', async (req, res) => {
-  try {
-    // Sync transaction TYPE and is_internal_transfer when category changes natively
-    if (req.body.category_id && !req.body.type) {
-      const { data: newCat } = await supabase.from('categories').select('nature, group_name').eq('id', req.body.category_id).single();
-      if (newCat) {
-        if (newCat.nature === 'income') {
-          req.body.type = 'income';
-          req.body.is_internal_transfer = false;
-        } else if (newCat.nature === 'expense') {
-          req.body.type = 'expense';
-          req.body.is_internal_transfer = false;
-        } else if (newCat.nature === 'transfer' || newCat.group_name?.includes('Transfer')) {
-          req.body.type = 'transfer';
-          req.body.is_internal_transfer = true;
-        }
-      }
-    }
-
-    // Force strict mathematical signs based on the TYPE (whether given by body or synced)
-    if (req.body.amount !== undefined) {
-      const isIncome = req.body.type === 'income' || (!req.body.type && req.body.category_id && req.body.is_internal_transfer === false); 
-      // Safe fallback: If we know the definitive type:
-      if (req.body.type === 'income') {
-        req.body.amount = Math.abs(parseFloat(req.body.amount));
-      } else if (req.body.type === 'expense') {
-        req.body.amount = -Math.abs(parseFloat(req.body.amount));
-      }
-    }
-
-    const { data, error } = await supabase
-      .from('transactions')
-      .update(req.body)
-      .eq('id', req.params.id)
-      .eq('user_id', req.user.id)
-      .select()
-      .single();
-    if (error) throw error;
-    flagInsightRecalc(req.user.id);
-    logAudit(req.user.id, 'transaction_updated', `Transação atualizada: ${data.description || req.params.id}`, '✏️');
-    res.json(data);
-  } catch (err) {
-    console.error('PUT /transactions error:', err);
-    res.status(500).json({ error: 'Erro ao atualizar transação' });
-  }
-});
-
-// DELETE /api/transactions/:id
-router.delete('/:id', async (req, res) => {
-  try {
-    const { error } = await supabase
-      .from('transactions')
-      .delete()
-      .eq('id', req.params.id)
-      .eq('user_id', req.user.id);
-    if (error) throw error;
-    flagInsightRecalc(req.user.id);
-    logAudit(req.user.id, 'transaction_deleted', `Transação excluída: ${req.params.id}`, '🗑️');
-    res.json({ success: true });
-  } catch (err) {
-    console.error('DELETE /transactions error:', err);
-    res.status(500).json({ error: 'Erro ao excluir transação' });
-  }
-});
-
-export default router;
+export default createTransactionsRouter();

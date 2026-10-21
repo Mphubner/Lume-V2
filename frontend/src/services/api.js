@@ -1,8 +1,11 @@
+import { queryClient } from './queryClient';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
 
 class ApiService {
   constructor() {
     this.token = null;
+    this.workspace = 'all';
+    this.sessionId = null;
     this._offline = false;
     this._offlineWarned = false;
     this._lastCheck = 0;
@@ -13,14 +16,13 @@ class ApiService {
   }
 
   async request(endpoint, options = {}) {
-    // If backend is known to be offline, skip the fetch entirely
-    // Re-check every 30 seconds in case backend comes up
-    const now = Date.now();
-    if (this._offline && (now - this._lastCheck) < 30000) {
-      throw new Error('Backend offline');
-    }
-
-    const url = `${API_URL}${endpoint}`;
+    const { invalidate = true, ...fetchOptions } = options;
+    const requestUrl = new URL(`${API_URL}${endpoint}`, window.location.origin);
+    const contextual = /^\/(dashboard|notifications|audit|accounts|transactions|categories|recurring|debts|goals|budgets|health|reserve|ai|import)(\/|\?|$)/.test(endpoint) || endpoint.startsWith('/profile/export') || endpoint.startsWith('/profile/onboarding');
+    if (contextual && !requestUrl.searchParams.has('workspace')) requestUrl.searchParams.set('workspace', this.workspace);
+    const workspace = this.workspace;
+    const url = requestUrl.toString();
+    const sessionId = this.sessionId;
     const headers = {
       'Content-Type': 'application/json',
       ...(this.token && { Authorization: `Bearer ${this.token}` }),
@@ -29,28 +31,35 @@ class ApiService {
 
     try {
       const response = await fetch(url, {
-        ...options,
+        ...fetchOptions,
         headers,
         body: options.body ? JSON.stringify(options.body) : undefined,
       });
 
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Erro de rede' }));
-        throw new Error(error.error || `HTTP ${response.status}`);
+        const failure = new Error(error.error || `HTTP ${response.status}`);
+        failure.code = error.code;
+        failure.status = response.status;
+        throw failure;
       }
 
       // Backend is online — reset offline flags
       this._offline = false;
       this._offlineWarned = false;
-      return response.json();
+      const data = await response.json();
+      if (sessionId !== this.sessionId || (contextual && workspace !== this.workspace)) throw new Error('Sessão alterada; solicitação descartada.');
+      if (invalidate && options.method && options.method !== 'GET') await queryClient.invalidateQueries();
+      return data;
     } catch (err) {
+      window.dispatchEvent(new CustomEvent('lume:api-error', { detail: { message: err.message } }));
       // Detect connection errors (backend offline / demo mode)
       const isConnectionError = err.message === 'Failed to fetch' || err.message === 'Backend offline' || err.name === 'TypeError';
       if (isConnectionError) {
         this._offline = true;
         this._lastCheck = Date.now();
         if (!this._offlineWarned) {
-          console.warn('🔶 Lume: Backend offline — usando dados demo. Inicie o backend em localhost:5001 para dados reais.');
+          console.warn('Lume: serviço indisponível. Nenhum dado financeiro foi confirmado.');
           this._offlineWarned = true;
         }
         throw err;
@@ -63,7 +72,7 @@ class ApiService {
 
   // Dashboard
   getDashboard(params = {}) {
-    const cleanParams = Object.fromEntries(Object.entries(params).filter(([_, v]) => v != null && v !== ''));
+    const cleanParams = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
     const qs = new URLSearchParams(cleanParams).toString();
     return this.request(`/dashboard?${qs}`);
   }
@@ -74,12 +83,12 @@ class ApiService {
 
   // Transactions
   getTransactions(params = {}) {
-    const cleanParams = Object.fromEntries(Object.entries(params).filter(([_, v]) => v != null && v !== ''));
+    const cleanParams = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
     const qs = new URLSearchParams(cleanParams).toString();
     return this.request(`/transactions?${qs}`);
   }
   getTransactionSummary(params = {}) {
-    const cleanParams = Object.fromEntries(Object.entries(params).filter(([_, v]) => v != null && v !== ''));
+    const cleanParams = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
     const qs = new URLSearchParams(cleanParams).toString();
     return this.request(`/transactions/summary?${qs}`);
   }
@@ -133,8 +142,10 @@ class ApiService {
   updateReserve(data) { return this.request('/reserve/update', { method: 'POST', body: data }); }
 
   // AI
-  getInsights(force = false) { return this.request(`/ai/insights${force ? '?force=true' : ''}`, { method: 'POST' }); }
-  chat(message) { return this.request('/ai/chat', { method: 'POST', body: { message } }); }
+  getInsights(force = false, context = {}) { return this.request(`/ai/insights${force ? '?force=true' : ''}`, { method: 'POST', body: context, invalidate: false }); }
+  chat(message, context = {}) { return this.request('/ai/chat', { method: 'POST', body: { message, ...context }, invalidate: false }); }
+  getAIStatus() { return this.request('/ai/status'); }
+  getFinancialPlan(data = {}) { return this.request('/ai/plan', { method: 'POST', body: data, invalidate: false }); }
   getAIRules() { return this.request('/ai/rules'); }
   updateAIRule(id, data) { return this.request(`/ai/rules/${id}`, { method: 'PUT', body: data }); }
   deleteAIRule(id) { return this.request(`/ai/rules/${id}`, { method: 'DELETE' }); }
@@ -146,11 +157,14 @@ class ApiService {
   // Audit
   getAuditLog() { return this.request('/audit'); }
 
-  async uploadFile(file, accountId, memberId) {
+  async uploadFile(file, accountId, memberId, parserOptions = {}) {
+    const identity = { sessionId: this.sessionId, workspace: this.workspace };
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('parser_options', JSON.stringify(parserOptions));
     if (accountId) formData.append('account_id', accountId);
     if (memberId) formData.append('member_id', memberId);
+    if (this.workspace !== 'all') formData.append('workspace', this.workspace);
 
     const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5001/api'}/import/upload`, {
       method: 'POST',
@@ -161,11 +175,14 @@ class ApiService {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Erro na importação');
     }
-    return res.json();
+    const data = await res.json();
+    if (identity.sessionId !== this.sessionId || identity.workspace !== this.workspace) throw new Error('Sessão alterada; importação recebida no contexto original. Consulte o histórico.');
+    await queryClient.invalidateQueries();
+    return data;
   }
-  getPendingReconciliation() { return this.request('/import/pending'); }
+  getPendingReconciliation(params = {}) { return this.request(`/import/pending?${new URLSearchParams(params)}`); }
   reconcileTransaction(id, data) { return this.request(`/import/reconcile/${id}`, { method: 'PATCH', body: data }); }
-  reconcileAll(importId) { return this.request('/import/reconcile-all', { method: 'PATCH', body: importId ? { import_id: importId } : {} }); }
+  reconcileAll(body) { return this.request('/import/reconcile-all', { method: 'PATCH', body }); }
 
   // Family / Workspaces
   getFamily() { return this.request('/family'); }
@@ -174,7 +191,7 @@ class ApiService {
 
   // Admin
   getKPIs() { return this.request('/admin/kpis'); }
-  getUsers(search) { return this.request(`/admin/users${search ? `?search=${search}` : ''}`); }
+  getUsers(search) { return this.request(`/admin/users${search ? `?search=${encodeURIComponent(search)}` : ''}`); }
   getUserDetail(id) { return this.request(`/admin/users/${id}`); }
   grantAccess(userId, plan) { return this.request('/admin/grant-access', { method: 'POST', body: { user_id: userId, plan } }); }
   getSettings() { return this.request('/admin/settings'); }

@@ -1,60 +1,62 @@
--- ============================================================
--- Lume: AI Evolution Migration
--- Run this in Supabase SQL Editor
--- ============================================================
-
--- 1. Add reconciliation fields to transactions
-ALTER TABLE transactions
-  ADD COLUMN IF NOT EXISTS is_reconciled   BOOLEAN DEFAULT TRUE,
-  ADD COLUMN IF NOT EXISTS ai_confidence   FLOAT   DEFAULT NULL;
-
--- Existing transactions (manual/already confirmed) are reconciled by default
-UPDATE transactions SET is_reconciled = TRUE WHERE is_reconciled IS NULL;
-
--- Mark all existing import transactions as already reconciled 
--- (they were committed directly before this migration)
-UPDATE transactions SET is_reconciled = TRUE WHERE origin = 'import';
-
--- Index for the pending-review query (frequent access pattern)
-CREATE INDEX IF NOT EXISTS idx_transactions_pending_review
-  ON transactions(user_id, is_reconciled, origin)
-  WHERE is_reconciled = FALSE AND origin = 'import';
-
--- ============================================================
--- 2. Add AI cache control fields to profiles
--- ============================================================
-ALTER TABLE profiles
-  ADD COLUMN IF NOT EXISTS needs_insight_recalc BOOLEAN   DEFAULT TRUE,
-  ADD COLUMN IF NOT EXISTS last_insight_at       TIMESTAMPTZ DEFAULT NULL;
-
--- ============================================================
--- 3. Create AI insights cache table
--- ============================================================
-CREATE TABLE IF NOT EXISTS ai_insights_cache (
-  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     UUID        NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  payload     TEXT        NOT NULL,          -- JSON string from LLM
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Keep only last 5 per user (older ones are historical)
-CREATE INDEX IF NOT EXISTS idx_ai_insights_cache_user
-  ON ai_insights_cache(user_id, created_at DESC);
-
--- Row Level Security
-ALTER TABLE ai_insights_cache ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "Users see own insight cache" ON ai_insights_cache;
-CREATE POLICY "Users see own insight cache"
-  ON ai_insights_cache FOR ALL
-  USING (user_id = auth.uid());
-
--- ============================================================
--- 4. Ensure ai_rules has unique constraint on user_id + keyword
---    (needed for the UPSERT in reconcile endpoint)
--- ============================================================
-ALTER TABLE ai_rules
-  DROP CONSTRAINT IF EXISTS ai_rules_user_keyword_unique;
-
-ALTER TABLE ai_rules
-  ADD CONSTRAINT ai_rules_user_keyword_unique UNIQUE (user_id, keyword);
+-- Retired: retained as commented history only. Use backend/scripts/migrate.mjs.
+DO $$ BEGIN RAISE EXCEPTION 'Script legado desativado. Use migrações versionadas após backup.'; END $$;
+-- LEGACY: -- ============================================================
+-- LEGACY: -- Lume: AI Evolution Migration
+-- LEGACY: -- Run this in Supabase SQL Editor
+-- LEGACY: -- ============================================================
+-- LEGACY:
+-- LEGACY: -- 1. Add reconciliation fields to transactions
+-- LEGACY: ALTER TABLE transactions
+-- LEGACY:   ADD COLUMN IF NOT EXISTS is_reconciled   BOOLEAN DEFAULT TRUE,
+-- LEGACY:   ADD COLUMN IF NOT EXISTS ai_confidence   FLOAT   DEFAULT NULL;
+-- LEGACY:
+-- LEGACY: -- Existing transactions (manual/already confirmed) are reconciled by default
+-- LEGACY: UPDATE transactions SET is_reconciled = TRUE WHERE is_reconciled IS NULL;
+-- LEGACY:
+-- LEGACY: -- Mark all existing import transactions as already reconciled
+-- LEGACY: -- (they were committed directly before this migration)
+-- LEGACY: UPDATE transactions SET is_reconciled = TRUE WHERE origin = 'import';
+-- LEGACY:
+-- LEGACY: -- Index for the pending-review query (frequent access pattern)
+-- LEGACY: CREATE INDEX IF NOT EXISTS idx_transactions_pending_review
+-- LEGACY:   ON transactions(user_id, is_reconciled, origin)
+-- LEGACY:   WHERE is_reconciled = FALSE AND origin = 'import';
+-- LEGACY:
+-- LEGACY: -- ============================================================
+-- LEGACY: -- 2. Add AI cache control fields to profiles
+-- LEGACY: -- ============================================================
+-- LEGACY: ALTER TABLE profiles
+-- LEGACY:   ADD COLUMN IF NOT EXISTS needs_insight_recalc BOOLEAN   DEFAULT TRUE,
+-- LEGACY:   ADD COLUMN IF NOT EXISTS last_insight_at       TIMESTAMPTZ DEFAULT NULL;
+-- LEGACY:
+-- LEGACY: -- ============================================================
+-- LEGACY: -- 3. Create AI insights cache table
+-- LEGACY: -- ============================================================
+-- LEGACY: CREATE TABLE IF NOT EXISTS ai_insights_cache (
+-- LEGACY:   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+-- LEGACY:   user_id     UUID        NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+-- LEGACY:   payload     TEXT        NOT NULL,          -- JSON string from LLM
+-- LEGACY:   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- LEGACY: );
+-- LEGACY:
+-- LEGACY: -- Keep only last 5 per user (older ones are historical)
+-- LEGACY: CREATE INDEX IF NOT EXISTS idx_ai_insights_cache_user
+-- LEGACY:   ON ai_insights_cache(user_id, created_at DESC);
+-- LEGACY:
+-- LEGACY: -- Row Level Security
+-- LEGACY: ALTER TABLE ai_insights_cache ENABLE ROW LEVEL SECURITY;
+-- LEGACY:
+-- LEGACY: DROP POLICY IF EXISTS "Users see own insight cache" ON ai_insights_cache;
+-- LEGACY: CREATE POLICY "Users see own insight cache"
+-- LEGACY:   ON ai_insights_cache FOR ALL
+-- LEGACY:   USING (user_id = auth.uid());
+-- LEGACY:
+-- LEGACY: -- ============================================================
+-- LEGACY: -- 4. Ensure ai_rules has unique constraint on user_id + keyword
+-- LEGACY: --    (needed for the UPSERT in reconcile endpoint)
+-- LEGACY: -- ============================================================
+-- LEGACY: ALTER TABLE ai_rules
+-- LEGACY:   DROP CONSTRAINT IF EXISTS ai_rules_user_keyword_unique;
+-- LEGACY:
+-- LEGACY: ALTER TABLE ai_rules
+-- LEGACY:   ADD CONSTRAINT ai_rules_user_keyword_unique UNIQUE (user_id, keyword);

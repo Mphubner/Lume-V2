@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import ConfirmationNotice from '../../components/auth/ConfirmationNotice';
+import { authCallbackError, authDestination, authErrorMessage, authLink, hasConfirmedEmail, isUnconfirmedEmailError } from '../../services/auth';
 import { Sun, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
 
 const GoogleIcon = () => (
@@ -13,20 +15,22 @@ const GoogleIcon = () => (
 );
 
 export default function LoginPage() {
-  const { signIn, signInWithEmail, isDemoMode } = useAuth();
+  const { user, loading: authLoading, authConfigured, signIn, signInWithEmail, googleAuthEnabled, isPasswordRecovery } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(() => authCallbackError(location));
+  const [confirmationEmail, setConfirmationEmail] = useState('');
+  const next = authDestination(location);
 
   const handleGoogleLogin = () => {
     setLoading(true);
     setError('');
-    signIn('google').catch((err) => {
-      console.error(err);
-      setError(`Erro Google: ${err.message || 'Bloqueado pelo navegador'}`);
+    signIn('google', next).catch((err) => {
+      setError(authErrorMessage(err));
       setLoading(false);
     });
   };
@@ -36,21 +40,17 @@ export default function LoginPage() {
     if (!email || !password) { setError('Preencha todos os campos'); return; }
     setLoading(true);
     setError('');
+    setConfirmationEmail('');
     try {
-      await signInWithEmail(email, password);
-      navigate('/dashboard');
+      await signInWithEmail(email.trim(), password);
+      navigate(next, { replace: true });
     } catch (err) {
-      const msg = err.message;
-      if (msg.includes('Invalid login')) setError('Email ou senha incorretos.');
-      else if (msg.includes('Email not confirmed')) setError('Confirme seu email antes de fazer login. Verifique sua caixa de entrada.');
-      else setError('Erro ao fazer login. Tente novamente.');
-      setLoading(false);
-    }
+      setError(authErrorMessage(err));
+      if (isUnconfirmedEmailError(err)) setConfirmationEmail(email.trim());
+    } finally { setLoading(false); }
   };
 
-  const handleDemoLogin = () => {
-    navigate('/dashboard');
-  };
+  if (!authLoading && hasConfirmedEmail(user)) return <Navigate to={isPasswordRecovery ? '/resetar-senha' : next} replace />;
 
   return (
     <div className="auth-page">
@@ -86,20 +86,22 @@ export default function LoginPage() {
           <div className="auth-form-wrapper">
             <div className="auth-form-header">
               <h2>Bem-vindo de volta</h2>
-              <p>Entre na sua conta para continuar</p>
+              <p>Entre com seu email e senha para continuar</p>
             </div>
 
-            {error && <div className="auth-error">{error}</div>}
+            {error && <div className="auth-error" role="alert">{error}</div>}
+            {authConfigured === false ? <div className="auth-error" role="alert">O acesso está temporariamente indisponível neste ambiente. Tente novamente mais tarde.</div> : null}
+            {confirmationEmail ? <ConfirmationNotice key={confirmationEmail} email={confirmationEmail} next={next} /> : null}
 
             {/* Google OAuth */}
-            <button className="auth-google-btn" onClick={handleGoogleLogin} disabled={loading}>
+            {googleAuthEnabled ? <><button type="button" className="auth-google-btn" onClick={handleGoogleLogin} disabled={loading}>
               <GoogleIcon />
               <span>Continuar com Google</span>
             </button>
 
             <div className="auth-divider">
               <span>ou entre com email</span>
-            </div>
+            </div></> : null}
 
             {/* Email/Password form */}
             <form onSubmit={handleEmailLogin} className="auth-form">
@@ -107,45 +109,43 @@ export default function LoginPage() {
                 <Mail size={18} className="auth-field-icon" />
                 <input
                   type="email"
-                  placeholder="seu@email.com"
+                  aria-label="seu@email.com" placeholder="seu@email.com"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   autoComplete="email"
+                  required
                 />
               </div>
               <div className="auth-field">
                 <Lock size={18} className="auth-field-icon" />
                 <input
                   type={showPassword ? 'text' : 'password'}
-                  placeholder="Sua senha"
+                  aria-label="Sua senha" placeholder="Sua senha"
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   autoComplete="current-password"
+                  required
                 />
-                <button type="button" className="auth-field-toggle" onClick={() => setShowPassword(!showPassword)}>
+                <button type="button" aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"} className="auth-field-toggle" onClick={() => setShowPassword(!showPassword)}>
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
 
               <div className="auth-form-actions">
-                <Link to="/esqueci-senha" className="auth-link">Esqueci minha senha</Link>
+                <Link to={authLink('/esqueci-senha', next)} className="auth-link">Esqueci minha senha / criar senha</Link>
               </div>
 
-              <button type="submit" className="auth-submit-btn" disabled={loading}>
+              <button type="submit" className="auth-submit-btn" disabled={loading || authConfigured === false}>
                 {loading ? <span className="spinner" style={{ width: 20, height: 20 }} /> : <><span>Entrar</span><ArrowRight size={18} /></>}
               </button>
             </form>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.6, marginTop: '1rem' }}>Já entrava com Google? Use o mesmo email e escolha “Esqueci minha senha” para definir uma senha.</p>
 
             <div className="auth-footer">
               <span>Não tem uma conta?</span>
-              <Link to="/cadastro" className="auth-link-strong">Criar conta grátis</Link>
+              <Link to={authLink('/cadastro', next)} className="auth-link-strong">Criar conta grátis</Link>
             </div>
 
-            {isDemoMode && (
-              <button className="auth-demo-btn" onClick={handleDemoLogin}>
-                🎮 Entrar em modo demonstração
-              </button>
-            )}
           </div>
         </div>
       </div>

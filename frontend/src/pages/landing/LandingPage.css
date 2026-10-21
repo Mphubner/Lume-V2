@@ -167,6 +167,7 @@
 }
 .hero-cta-group {
   display: flex;
+  flex-wrap: wrap;
   gap: 1.5rem;
   justify-content: center;
   margin-bottom: 5rem;
@@ -470,4 +471,8 @@
   .preview-image-large img { width: 100%; border-radius: 0 0 24px 24px; transform: none; box-shadow: none; animation: none; }
   .hero-title { font-size: 2.5rem; }
   .price-card.popular { transform: none; }
+}
+@media (max-width: 600px) {
+  .hero-cta-group { flex-direction: column; gap: 1rem; margin-bottom: 2rem; }
+  .hero-cta-group .btn { width: 100%; white-space: normal; min-height: 48px; }
 }

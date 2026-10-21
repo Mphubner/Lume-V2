@@ -1,380 +1,243 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
+import multer from 'multer';
 import { authMiddleware } from '../middleware/auth.js';
 import { supabase } from '../config/supabase.js';
-import multer from 'multer';
-import { categorizeTransaction } from '../services/aiService.js';
-import { extractTransactionsFromPDF } from '../services/pdfExtractor.js';
-import { logAudit } from './audit.js';
+import { HTTPError, assertUUID, checked, requireRecordAccess, resolveScope, scopeQuery, handleError } from '../services/access.js';
+import { sha256, ImportError, parseAmountCents, centsToDecimal, parseStatementDate, MAX_IMPORT_ROWS } from '../domain/importParsers.js';
+import { MAX_IMPORT_BYTES } from '../domain/importLimits.js';
+import { getImportCapabilities } from '../services/importPipeline.js';
+import { convertStatement } from '../domain/statementConversion.js';
+import { IMPORT_BUCKET } from '../services/importWorker.js';
+import { enrichFinancialRows } from '../services/relations.js';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-
 router.use(authMiddleware);
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_IMPORT_BYTES, files: 1, fields: 8, fieldSize: 8192 } }).single('file');
+// Admission control happens BEFORE buffering a file. Durable queue limits also
+// apply across instances, once the document hash and authorized account are known.
+export function createBoundedUpload(uploadHandler=upload) {
+ const activeUploads = new Set();
+ return function boundedUpload(req, res, next) {
+  if (activeUploads.size >= 4 || activeUploads.has(req.user.id)) return res.status(429).json({ error: 'Já há um upload em andamento. Tente novamente em instantes.' });
+  activeUploads.add(req.user.id);
+  const release = () => activeUploads.delete(req.user.id);
+  res.once('finish', release); res.once('close', release);
+  uploadHandler(req, res, error => {
+    if (error) { release(); return res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Arquivo excede o limite de 20 MB.' : 'Upload inválido. Envie um único arquivo.' }); }
+    next();
+  });
+ };
+}
+const boundedUpload=createBoundedUpload();
 
-// Processamento Assíncrono da Fila
-async function processImportBackground(user, fileBuffer, fileType, importRecordId, accountId, memberId, accountType, familyId) {
-  try {
-    let rawTransactions = [];
-    let discoveredTitular = null;
-
-    const [categoriesRes, rulesRes] = await Promise.all([
-      supabase.from('categories').select('*').or(`user_id.eq.${user.id},is_system.eq.true`),
-      supabase.from('ai_rules').select('*, categories(name)').eq('user_id', user.id).eq('is_active', true),
-    ]);
-
-    const userRules = (rulesRes.data || []).map(r => ({ keyword: r.keyword, category_name: r.categories?.name }));
-    const catList = categoriesRes.data || [];
-    
-    // Construir dicionário hierárquico para a IA: { "Saúde": ["Academia", "Exames"], ... }
-    const catDict = {};
-    for (const c of catList) {
-      catDict[c.name] = Array.isArray(c.subcategories) ? c.subcategories : [];
-    }
-
-    if (fileType === 'pdf') {
-      const result = await extractTransactionsFromPDF(fileBuffer, catDict);
-      rawTransactions = result.transactions;
-      discoveredTitular = result.titular;
-    } else if (fileType === 'ofx') {
-      rawTransactions = parseOFX(fileBuffer.toString());
-    } else if (fileType === 'csv') {
-      rawTransactions = parseCSV(fileBuffer.toString());
-    } else if (fileType === 'xlsx') {
-      const xlsx = await import('xlsx');
-      const workbook = xlsx.read(fileBuffer);
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows = xlsx.utils.sheet_to_json(sheet);
-      rawTransactions = rows.map(row => ({
-        date: row.Data || row.date || row.DATE,
-        description: row.Descrição || row.Descricao || row.description || row.DESCRIPTION || row.Histórico || '',
-        amount: parseFloat(String(row.Valor || row.value || row.VALUE || row.Amount || 0).replace(',', '.')),
-      }));
-    }
-
-    if (rawTransactions.length === 0) {
-      await supabase.from('imports').update({ status: 'empty', total_transactions: 0 }).eq('id', importRecordId);
-      return;
-    }
-
-    let imported = 0;
-    let duplicates = 0;
-    const batchHashes = new Set(); // Previne duplicatas dentro do mesmo lote de importação
-
-    for (const raw of rawTransactions) {
-      if (!raw.description || raw.amount === undefined || raw.amount === null) continue;
-
-      let normalizedDate = raw.date || new Date().toISOString().split('T')[0];
-      if (/^\d{2}\/\d{2}\/\d{4}$/.test(normalizedDate)) {
-        const [d, m, y] = normalizedDate.split('/');
-        normalizedDate = `${y}-${m}-${d}`;
-      } else if (/^\d{2}\/\d{2}\/\d{2}$/.test(normalizedDate)) {
-        const [d, m, y] = normalizedDate.split('/');
-        normalizedDate = `20${y}-${m}-${d}`;
-      }
-
-      // Normaliza a descrição para o hash para evitar duplicatas por variações da IA nos overlaps
-      const normalizedDescForHash = raw.description.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 15);
-      const hash = Buffer.from(`${normalizedDate}-${normalizedDescForHash}-${raw.amount}`).toString('base64');
-      
-      // Guard 1: Intra-batch duplicate (overlap de chunks pode gerar a mesma transação 2x)
-      if (batchHashes.has(hash)) { duplicates++; continue; }
-      batchHashes.add(hash);
-      
-      // Guard 2: Duplicate already in database (reimportação do mesmo arquivo)
-      const { data: existing } = await supabase.from('transactions').select('id').eq('import_hash', hash).eq('user_id', user.id).limit(1);
-      if (existing?.length > 0) { duplicates++; continue; }
-
-      let categoryId = null;
-      let subcategoryName = null;
-      const descLower = raw.description.toLowerCase();
-      const matchedRule = userRules.find(r => descLower.includes(r.keyword.toLowerCase()));
-      
-      if (matchedRule) {
-        const cat = catList.find(c => c.name === matchedRule.category_name);
-        categoryId = cat?.id;
-        subcategoryName = matchedRule.subcategory || null; // if rule has subcategory
-        if (matchedRule.id) {
-          await supabase.from('ai_rules').update({ usage_count: matchedRule.usage_count + 1 }).eq('id', matchedRule.id);
-        }
-      } else if (raw.category) {
-        const cat = catList.find(c => c.name.toLowerCase() === raw.category.toLowerCase());
-        categoryId = cat?.id;
-        subcategoryName = raw.subcategory || null;
-      }
-
-      let aiConfidence = null;
-      if (!categoryId) {
-        // Find 'Outros' or leave null so the user categorizes it on the frontend UI.
-        const catOutros = catList.find(c => c.name === 'Outros');
-        categoryId = catOutros ? catOutros.id : null;
-        aiConfidence = 0.5; // low confidence, user must review
-      } else {
-        aiConfidence = 1.0; // matched by rule or exact name — high confidence
-      }
-
-      // Regra Lógica: Tipo de transação baseado em keywords da descrição
-      const entradaKw = ['devolvid', 'recebid', 'recebida', 'resgate', 'credito domicilio', 'credito cartao', 'remuneração', 'remuneracao', 'rendimento', 'salário', 'salario', 'estorno', 'transferencia recebida'];
-      const saidaKw = ['compra no debito', 'compra no débito', 'pagamento', 'pix enviado:', 'aplicacao', 'aplicação', 'saque', 'tarifa', 'iof'];
-      const isEntrada = entradaKw.some(kw => descLower.includes(kw));
-      const isSaida = !isEntrada && saidaKw.some(kw => descLower.includes(kw));
-      const isTransfer = (descLower.includes('transferencia') || descLower.includes('pix env') || descLower.includes('pix rec')) && !descLower.includes('salario');
-
-      // Garantir que o amount esteja com o sinal correto antes de inserir
-      let correctedAmount = raw.amount;
-      if (isEntrada && correctedAmount < 0) correctedAmount = Math.abs(correctedAmount);
-      if (isSaida && correctedAmount > 0) correctedAmount = -Math.abs(correctedAmount);
-
-      try {
-        await supabase.from('transactions').insert({
-          user_id: user.id,
-          account_id: accountId,
-          account_type: accountType || 'personal',
-          family_id: familyId || null,
-          member_id: memberId,
-          category_id: categoryId,
-          subcategory: subcategoryName,
-          description: raw.description,
-          raw_description: raw.description,
-          amount: correctedAmount,
-          type: isTransfer ? 'transfer' : (correctedAmount >= 0 ? 'income' : 'expense'),
-          is_internal_transfer: isTransfer,
-          date: normalizedDate,
-          origin: 'import',
-          import_hash: hash,
-          is_confirmed: true,
-          is_reconciled: false,
-          ai_confidence: aiConfidence,
-          import_id: importRecordId
-        });
-        imported++;
-      } catch (insertErr) {
-        console.warn('Failed to insert single transaction:', raw.description, insertErr.message);
-      }
-    }
-
-    await supabase.from('imports').update({
-      total_transactions: rawTransactions.length,
-      imported_transactions: imported,
-      duplicates_skipped: duplicates,
-      status: 'completed',
-    }).eq('id', importRecordId);
-
-    logAudit(user.id, 'import_completed', `Importação concluída: ${imported} transações importadas, ${duplicates} duplicatas ignoradas`, '📤');
-
-  } catch (err) {
-    console.error('Background import processing error:', err);
-    await supabase.from('imports').update({ status: 'failed' }).eq('id', importRecordId);
+const publicJob = row => {
+  const { storage_path: _storage, lease_token: _token, lease_until: _lease, pipeline_manifest: _manifest, ...rest } = row;
+  return rest;
+};
+const pageNumber = (value, fallback, max = Number.MAX_SAFE_INTEGER) => {
+  const number = value === undefined ? fallback : Number(value);
+  if (!Number.isSafeInteger(number) || number < 0 || number > max) throw new HTTPError(400, 'Paginação inválida.');
+  return number;
+};
+function fail(res, error) {
+  if (error instanceof ImportError) return res.status(422).json({ error: error.message, code: error.code, details: error.details });
+  return handleError(res, error);
+}
+function parseOptions(value) {
+  let options = value || {};
+  if (typeof options === 'string') {
+    try { options = JSON.parse(options); } catch { throw new HTTPError(400, 'Mapeamento CSV inválido.'); }
   }
+  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['locale', 'delimiter', 'columns'].includes(key))) throw new HTTPError(400, 'Opções do extrato inválidas.');
+  if (options.locale && !['pt-BR', 'en-US'].includes(options.locale)) throw new HTTPError(400, 'Locale inválido.');
+  if (options.delimiter && ![';', ',', '\t'].includes(options.delimiter)) throw new HTTPError(400, 'Separador inválido.');
+  if (options.columns && (typeof options.columns !== 'object' || Array.isArray(options.columns) || Object.entries(options.columns).some(([key, val]) => !['date','description','amount','debit','credit','external_id','currency'].includes(key) || !(typeof val === 'string' && val.length <= 80 || Number.isInteger(val) && val >= 0 && val < 100)))) throw new HTTPError(400, 'Mapeamento de colunas inválido.');
+  return options;
 }
 
-// POST /api/import/upload
-router.post('/upload', upload.single('file'), async (req, res) => {
+router.post('/upload', boundedUpload, async (req, res) => {
+  let job;
   try {
-    if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
-
-    const { account_id, member_id } = req.body;
-    const fileType = req.file.originalname.split('.').pop().toLowerCase();
-
-    if (!['csv', 'ofx', 'xlsx', 'pdf'].includes(fileType)) {
-      return res.status(400).json({ error: 'Formato não suportado. Use PDF, CSV, XLSX ou OFX.' });
+    if (!req.file?.buffer?.length) throw new HTTPError(400, 'Nenhum arquivo enviado.');
+    assertUUID(req.body.account_id);
+    const account = await requireRecordAccess(supabase, 'accounts', req.body.account_id, req.user.id, 'write');
+    if (req.body.workspace && req.body.workspace !== account.workspace_id) {
+      const scope = await resolveScope(supabase, req.user.id, req.body.workspace, 'write');
+      if (scope.id !== account.workspace_id) throw new HTTPError(403, 'A conta não pertence ao espaço selecionado.');
     }
-
-    // Criar o registro da importação "processing" (A fila)
-    const { data: importRecord, error } = await supabase.from('imports').insert({
-      user_id: req.user.id,
-      account_id,
-      filename: req.file.originalname,
-      file_type: fileType,
-      status: 'processing',
-    }).select().single();
-
-    if (error) throw error;
-
-    // Fire and Forget (Lança o processo pesado em background)
-    // Precisamos buscar account_type e family_id para preencher nas transactions, senão elas ficam invisíveis no filtro de Workspace!
-    const { data: accData } = await supabase.from('accounts').select('type, account_type, family_id').eq('id', account_id).single();
-    processImportBackground(req.user, req.file.buffer, fileType, importRecord.id, account_id, member_id, accData?.account_type, accData?.family_id);
-
-    // Responde instantaneamente
-    res.status(202).json({
-      success: true,
-      status: 'processing',
-      importId: importRecord.id,
-      message: 'Arquivo na fila de processamento. Pode sair da página!'
-    });
-  } catch (err) {
-    console.error('Import initialization error:', err);
-    res.status(500).json({ error: 'Erro ao iniciar importação: ' + err.message });
+    const fileType = req.file.originalname.split('.').pop().toLowerCase();
+    if (!['csv','ofx','pdf','xlsx','txt','png','jpg','jpeg'].includes(fileType)) throw new HTTPError(415, 'Use CSV, OFX, XLSX, TXT tabular, PDF ou imagem PNG/JPEG. Outros formatos não são convertidos.');
+    if (['png','jpg','jpeg'].includes(fileType)) {
+      const capabilities=await getImportCapabilities();
+      if(!capabilities.ocr.available)throw new HTTPError(422,capabilities.ocr.reason);
+    }
+    const options = parseOptions(req.body.parser_options);
+    job = checked(await supabase.rpc('reserve_import_job', {
+      p_actor: req.user.id, p_id: randomUUID(), p_account: account.id, p_hash: sha256(req.file.buffer),
+      p_filename: req.file.originalname.replace(/[\\/\x00-\x1f]/g, '_').slice(0, 240), p_type: fileType, p_size: req.file.size, p_options: options,
+    }));
+    if (job.existing) return res.status(200).json({ success: true, existing: true, status: job.status, importId: job.id, message: 'Este documento já possui um lote nesta conta. Consulte o histórico para revisar ou retentar.' });
+    checked(await supabase.storage.from(IMPORT_BUCKET).upload(job.storage_path, req.file.buffer, { contentType: 'application/octet-stream', upsert: job.reupload === true, cacheControl: '0' }));
+    const queued = checked(await supabase.rpc('enqueue_import_job', { p_actor: req.user.id, p_import: job.id }));
+    return res.status(202).json({ success: true, status: queued.status, importId: queued.id, message: 'Documento salvo na fila. Os saldos só mudarão após a conferência e aprovação do lote.' });
+  } catch (error) {
+    if (job && !job.existing) {
+      // A database outage leaves uploading; claim_import_job expires it explicitly.
+      await supabase.from('imports').update({ status: 'failed', last_error_code: 'UPLOAD_FAILED', error_message: 'Não foi possível salvar ou enfileirar o arquivo.', updated_at: new Date().toISOString() }).eq('id', job.id).eq('status', 'uploading');
+    }
+    return fail(res, error);
   }
 });
 
-// GET /api/import/history
+router.get('/capabilities',async (_req,res)=>res.json(await getImportCapabilities()));
+
+router.get('/:id/convert',async (req,res)=>{
+  try {
+    const job=await requireRecordAccess(supabase,'imports',req.params.id,req.user.id);
+    if(!['needs_review','completed','reversed'].includes(job.status))throw new HTTPError(409,'Aguarde a extração completa para converter o documento.');
+    if(!['csv','ofx'].includes(req.query.format))throw new HTTPError(400,'Escolha CSV ou OFX.');
+    const rows=[];
+    for(let offset=0;offset<Number(job.total_transactions);offset+=500) {
+      const page=checked(await supabase.from('import_rows').select('row_number,date,description,amount_cents,source_identity').eq('import_id',job.id).order('row_number').range(offset,offset+499));
+      rows.push(...page);
+    }
+    const content=convertStatement(rows,job,req.query.format);
+    return res.json({filename:`lume-conversao-${job.id}.${req.query.format}`,media_type:req.query.format==='csv'?'text/csv;charset=utf-8':'application/x-ofx;charset=utf-8',content,review_required:true,notice:'Conversão das linhas extraídas para conferência. Não comprova conferência, saldo bancário ou aprovação. Identificadores de conversão representam documento e linha; não foram emitidos pelo banco.'});
+  }catch(error){return fail(res,error);}
+});
+
 router.get('/history', async (req, res) => {
   try {
-    const { data, error } = await supabase.from('imports').select('*, accounts(name)').eq('user_id', req.user.id).order('created_at', { ascending: false }).limit(20);
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao buscar histórico de importações' });
-  }
+    const scope = await resolveScope(supabase, req.user.id, req.query.workspace);
+    const limit = pageNumber(req.query.limit, 30, 100) || 1;
+    const offset = pageNumber(req.query.offset, 0);
+    const rows = checked(await scopeQuery(supabase.from('imports').select('*'), scope).order('created_at', { ascending: false }).range(offset, offset + limit - 1));
+    return res.json((await enrichFinancialRows(supabase,rows,scope,{accounts:true})).map(publicJob));
+  } catch (error) { return fail(res, error); }
 });
 
-// GET /api/import/pending — All transactions awaiting reconciliation
 router.get('/pending', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('transactions')
-      .select('*, categories(id, name, icon, color), accounts(name)')
-      .eq('user_id', req.user.id)
-      .eq('is_reconciled', false)
-      .eq('origin', 'import')
-      .order('date', { ascending: false })
-      .limit(200);
-    if (error) throw error;
-    res.json({ transactions: data || [], count: (data || []).length });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao buscar transações pendentes' });
-  }
+    const scope = await resolveScope(supabase, req.user.id, req.query.workspace);
+    const limit = pageNumber(req.query.limit, 100, 500) || 1;
+    const offset = pageNumber(req.query.offset, 0);
+    let query = scopeQuery(supabase.from('import_rows').select('*, imports!inner(status,filename,workspace_id)', { count: 'exact' }), scope).in('imports.workspace_id',scope.ids)
+      .eq('imports.status', 'needs_review').order('import_id').order('row_number').range(offset, offset + limit - 1);
+    if (req.query.import_id) query = query.eq('import_id', assertUUID(req.query.import_id));
+    const result = await query; checked(result);
+    return res.json({ transactions: await enrichFinancialRows(supabase,result.data||[],scope,{accounts:true}), total: result.count || 0, count: result.count || 0, limit, offset });
+  } catch (error) { return fail(res, error); }
 });
 
-// PATCH /api/import/reconcile/:id — Approve or correct a pending transaction
+router.get('/rows/:id/candidates', async (req, res) => {
+  try {
+    const row = await requireRecordAccess(supabase, 'import_rows', req.params.id, req.user.id);
+    const fields = 'id,date,description,amount,account_id,economic_kind,accounts(name,type)';
+    const base = () => supabase.from('transactions').select(fields, { count: 'exact' }).eq('workspace_id', row.workspace_id)
+      .eq('ledger_status', 'posted').eq('is_reconciled', true).eq('legacy_needs_review', false);
+    const day = delta => new Date(new Date(`${row.date}T12:00:00Z`).getTime() + delta * 86400000).toISOString().slice(0, 10);
+    const amount = centsToDecimal(row.amount_cents);
+    const opposite = centsToDecimal(-BigInt(row.amount_cents));
+    const standard = () => base().eq('economic_kind', 'standard').eq('is_internal_transfer', false).is('linked_transaction_id', null).is('transfer_group_id', null).is('reversal_of', null);
+    const [duplicates, transfers, refunds] = await Promise.all([
+      base().eq('account_id', row.account_id).eq('date', row.date).eq('amount', amount).order('id').limit(20),
+      standard().neq('account_id', row.account_id).eq('amount', opposite).gte('date', day(-3)).lte('date', day(3)).order('date', { ascending: false }).order('id').limit(20),
+      (BigInt(row.amount_cents) > 0n ? standard().lte('amount', opposite) : standard().gte('amount', opposite))
+        .eq('account_id', row.account_id).lte('date', row.date).order('date', { ascending: false }).order('id').limit(20),
+    ]);
+    [duplicates, transfers, refunds].forEach(checked);
+    const referenceIds = [...new Set([...transfers.data, ...refunds.data].map(item => item.id))];
+    const previousRefunds = referenceIds.length ? checked(await supabase.from('transactions').select('reversal_of,amount').in('reversal_of', referenceIds).eq('ledger_status', 'posted')) : [];
+    const used = new Map();
+    for (const refund of previousRefunds) {
+      const cents = BigInt(parseAmountCents(String(refund.amount)));
+      used.set(refund.reversal_of, (used.get(refund.reversal_of) || 0n) + (cents < 0n ? -cents : cents));
+    }
+    const requested = BigInt(row.amount_cents) < 0n ? -BigInt(row.amount_cents) : BigInt(row.amount_cents);
+    return res.json({
+      duplicates: duplicates.data, transfers: transfers.data.filter(item => !used.has(item.id)),
+      refunds: refunds.data.filter(item => {
+        const cents = BigInt(parseAmountCents(String(item.amount)));
+        return (cents < 0n ? -cents : cents) - (used.get(item.id) || 0n) >= requested;
+      }),
+      truncated: [duplicates, transfers, refunds].some(result => result.count > 20), limit: 20,
+    });
+  } catch (error) { return fail(res, error); }
+});
+
+router.patch('/rows/:id', async (req, res) => {
+  try {
+    assertUUID(req.params.id);
+    const patch = req.body;
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HTTPError(400, 'Revisão inválida.');
+    for (const field of ['category_id', 'duplicate_of', 'reversal_of', 'linked_transaction_id']) if (patch[field] !== undefined && patch[field] !== null) assertUUID(patch[field]);
+    for (const field of ['distinct_confirmed', 'learn_rule']) if (patch[field] !== undefined && typeof patch[field] !== 'boolean') throw new HTTPError(400, 'Confirmação deve ser booleana.');
+    return res.json(checked(await supabase.rpc('update_import_row', { p_actor: req.user.id, p_row: req.params.id, p_patch: patch })));
+  } catch (error) { return fail(res, error); }
+});
+
+async function approve(actor, body) {
+  assertUUID(body.import_id);
+  if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > MAX_IMPORT_ROWS || new Set(body.ids).size !== body.ids.length) throw new HTTPError(400, 'Selecione explicitamente todas as linhas do lote.');
+  body.ids.forEach(assertUUID);
+  const balance = body.balance_check;
+  if (!balance || balance.source_confirmed !== true) throw new HTTPError(400, 'Confira conta, documento, período e saldos antes de aprovar.');
+  const checkedBalance = {
+    opening_balance: centsToDecimal(parseAmountCents(String(balance.opening_balance ?? ''))),
+    closing_balance: centsToDecimal(parseAmountCents(String(balance.closing_balance ?? ''))),
+    period_start: parseStatementDate(balance.period_start), period_end: parseStatementDate(balance.period_end), source_confirmed: true,
+  };
+  return checked(await supabase.rpc('approve_import_rows', { p_actor: actor, p_import: body.import_id, p_ids: body.ids, p_balance: checkedBalance }));
+}
+
+router.patch('/reconcile-all', async (req, res) => {
+  try { return res.json({ success: true, ...await approve(req.user.id, req.body) }); }
+  catch (error) { return fail(res, error); }
+});
+
+// Compatibility endpoint only works for a one-row batch, never implicit approval.
 router.patch('/reconcile/:id', async (req, res) => {
   try {
-    const { category_id, subcategory, approved } = req.body;
-    const { id } = req.params;
-
-    // Fetch original to detect category change for ML learning
-    const { data: original } = await supabase
-      .from('transactions')
-      .select('category_id, description, amount, categories(name)')
-      .eq('id', id)
-      .eq('user_id', req.user.id)
-      .single();
-
-    const updatePayload = { is_reconciled: true };
-    if (subcategory !== undefined) updatePayload.subcategory = subcategory;
-    
-    // Auto-correct transaction TYPE, is_internal_transfer, and amount sign
-    if (category_id) {
-      updatePayload.category_id = category_id;
-      
-      const { data: newCat } = await supabase.from('categories').select('name, nature, group_name').eq('id', category_id).single();
-      if (newCat) {
-        if (newCat.nature === 'income') {
-          updatePayload.type = 'income';
-          updatePayload.is_internal_transfer = false;
-          updatePayload.amount = Math.abs(original?.amount || 0);
-        } else if (newCat.nature === 'expense') {
-          updatePayload.type = 'expense';
-          updatePayload.is_internal_transfer = false;
-          updatePayload.amount = -Math.abs(original?.amount || 0);
-        } else if (newCat.nature === 'transfer' || newCat.group_name?.includes('Transfer')) {
-          updatePayload.type = 'transfer';
-          updatePayload.is_internal_transfer = true;
-          // Maintain original amount exactly as it came/exited
-        }
-      }
-    }
-
-    // If user corrected the category, save as ai_rule for passive learning
-    if (category_id && original?.category_id && category_id !== original.category_id && updatePayload.type) {
-      const { data: newCatName } = await supabase.from('categories').select('name').eq('id', category_id).single();
-      if (newCatName && original.description) {
-        // Melhora na palavra-chave (remove stopwords para ficar mais genérica nos lugares certos, mas grande o suficiente)
-        const stopWords = ['compra', 'pagamento', 'pix', 'de', 'do', 'da', 'no', 'na', 'em', 'para', 'recebido', 'enviado', 'transferencia', 'ted', 'doc', 'cartao', 'debito', 'credito', 'nf'];
-        let words = original.description.toLowerCase().replace(/[^a-z0-9 ]/g, '').split(' ').filter(w => w.length > 2 && !stopWords.includes(w));
-        let keyword = words.slice(0, 3).join(' '); // 3 meaningfully descriptive words
-        if (!keyword) keyword = original.description.toLowerCase().replace(/[^a-z0-9 ]/g, '').split(' ').slice(0, 3).join(' ');
-        
-        // Upsert rule — avoid duplicates
-        await supabase.from('ai_rules').upsert({
-          user_id: req.user.id,
-          keyword,
-          category_id,
-          subcategory: subcategory || null,
-          is_active: true,
-          usage_count: 1,
-        }, { onConflict: 'user_id,keyword', ignoreDuplicates: false });
-      }
-    }
-
-    const { data, error } = await supabase
-      .from('transactions')
-      .update(updatePayload)
-      .eq('id', id)
-      .eq('user_id', req.user.id)
-      .select()
-      .single();
-
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao conciliar transação: ' + err.message });
-  }
+    if (req.body.approved !== true) throw new HTTPError(400, 'Use a revisão do lote; aprovação precisa ser explícita.');
+    const row = await requireRecordAccess(supabase, 'import_rows', req.params.id, req.user.id, 'write');
+    if (req.body.import_id !== row.import_id) throw new HTTPError(400, 'Informe o lote correto.');
+    return res.json(await approve(req.user.id, { ...req.body, ids: [row.id] }));
+  } catch (error) { return fail(res, error); }
 });
 
-// PATCH /api/import/reconcile-all — Bulk approve all pending
-router.patch('/reconcile-all', async (req, res) => {
+router.get('/:id/source', async (req, res) => {
   try {
-    const { import_id } = req.body;
-    let query = supabase.from('transactions').update({ is_reconciled: true })
-      .eq('user_id', req.user.id).eq('is_reconciled', false).eq('origin', 'import');
-    if (import_id) query = query.eq('import_id', import_id);
-    const { error } = await query;
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao aprovar todas: ' + err.message });
-  }
+    const job = await requireRecordAccess(supabase, 'imports', req.params.id, req.user.id);
+    if (!job.storage_path || job.source_deleted_at) throw new HTTPError(410, 'O arquivo original não está disponível. A proveniência das linhas permanece no lote.');
+    const source = checked(await supabase.storage.from(IMPORT_BUCKET).createSignedUrl(job.storage_path, 300));
+    return res.json({ url: source.signedUrl, expires_in: 300 });
+  } catch (error) { return fail(res, error); }
 });
 
-// ---- PARSERS ----
+router.post('/:id/reverse', async (req, res) => {
+  try {
+    assertUUID(req.params.id);
+    if (typeof req.body.reason !== 'string' || req.body.reason.trim().length < 5) throw new HTTPError(400, 'Informe o motivo da reversão.');
+    return res.json(checked(await supabase.rpc('reverse_import_job', { p_actor: req.user.id, p_import: req.params.id, p_reason: req.body.reason })));
+  } catch (error) { return fail(res, error); }
+});
 
-function parseOFX(content) {
-  const transactions = [];
-  const stmttrns = content.match(/<STMTTRN>[\s\S]*?<\/STMTTRN>/gi) || [];
-  
-  for (const trn of stmttrns) {
-    const amount = parseFloat((trn.match(/<TRNAMT>(.*?)[\r\n<]/)?.[1] || '0').replace(',', '.'));
-    const dateStr = trn.match(/<DTPOSTED>(\d{8})/)?.[1];
-    const memo = trn.match(/<MEMO>(.*?)[\r\n<]/)?.[1]?.trim() || trn.match(/<NAME>(.*?)[\r\n<]/)?.[1]?.trim() || '';
-    
-    let date = new Date().toISOString().split('T')[0];
-    if (dateStr) {
-      date = `${dateStr.substring(0, 4)}-${dateStr.substring(4, 6)}-${dateStr.substring(6, 8)}`;
-    }
-    
-    transactions.push({ date, description: memo, amount });
-  }
-  return transactions;
-}
+router.post('/:id/cancel', async (req, res) => {
+  try {
+    const job = await requireRecordAccess(supabase, 'imports', req.params.id, req.user.id, 'write');
+    const data = checked(await supabase.from('imports').update({ status: 'cancelled', lease_token: null, lease_until: null, updated_at: new Date().toISOString() }).eq('id', job.id).in('status', ['uploading','queued','processing','needs_review','failed']).select().maybeSingle());
+    if (!data) throw new HTTPError(409, 'Lote concluído precisa ser revertido, não cancelado.');
+    return res.json(publicJob(data));
+  } catch (error) { return fail(res, error); }
+});
 
-function parseCSV(content) {
-  const lines = content.split('\n').filter(l => l.trim());
-  if (lines.length < 2) return [];
-  
-  const header = lines[0].toLowerCase();
-  const transactions = [];
-  
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(/[;,]/);
-    if (cols.length < 2) continue;
-    
-    let date = '', description = '', amount = 0;
-    
-    if (header.includes('data') || header.includes('date')) {
-      date = cols[0]?.trim();
-      description = cols[1]?.trim();
-      amount = parseFloat((cols[2] || cols[3] || '0').replace(/[^\d.,-]/g, '').replace(',', '.'));
-    } else {
-      date = cols[0]?.trim();
-      description = cols[1]?.trim();
-      amount = parseFloat((cols[cols.length - 1] || '0').replace(/[^\d.,-]/g, '').replace(',', '.'));
-    }
-    
-    if (description) transactions.push({ date, description, amount });
-  }
-  return transactions;
-}
+router.post('/:id/retry', async (req, res) => {
+  try {
+    const job = await requireRecordAccess(supabase, 'imports', req.params.id, req.user.id, 'write');
+    const data = checked(await supabase.rpc('retry_import_job', { p_actor: req.user.id, p_import: job.id, p_options: parseOptions(req.body.parser_options || job.parser_options) }));
+    return res.json(publicJob(data));
+  } catch (error) { return fail(res, error); }
+});
 
 export default router;

@@ -1,190 +1,87 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { supabase } from '../config/supabase.js';
-import { generateInsights, chatWithAssistant } from '../services/aiService.js';
+import { generateInsights, chatWithAssistant, getAIReadiness } from '../services/aiService.js';
+import { generateFinancialPlan } from '../services/plannerService.js';
+import { plannerScenarioSchema } from '../domain/planner.js';
+import { getFinancialContext, publicContext } from '../services/financialFacts.js';
+import { resolveScope, scopeQuery, requireRecordAccess, assertCategoryAccess, fetchAll, handleError, HTTPError } from '../services/access.js';
+import { ruleSchema, scopedBody } from '../domain/schemas.js';
+import { mutate } from '../services/mutations.js';
+import { enrichFinancialRows } from '../services/relations.js';
 
+const planRequestSchema = z.object({
+  scenario: plannerScenarioSchema.optional(), baseFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  period: z.enum(['month', '3months', '6months', '12months', 'year']).optional(),
+  month: z.coerce.number().int().min(1).max(12).optional(), year: z.coerce.number().int().min(1900).max(2200).optional(),
+  start_date: z.string().optional(), end_date: z.string().optional(),
+}).strict();
+export function createAIRouter(db = supabase, authenticate = authMiddleware, aiOptions = {}) {
 const router = Router();
-router.use(authMiddleware);
-
-// ─── Helper: build full financial context for RAG ───────────────────────────
-async function buildFinancialContext(userId) {
-  const now = new Date();
-  const threeMonthsAgo = new Date();
-  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-
-  const [txResult, debtsResult, goalsResult, reserveResult, recurringResult, healthResult] = await Promise.all([
-    supabase.from('transactions').select('amount, type, date, description, categories(name, group_name, nature)').eq('user_id', userId).gte('date', threeMonthsAgo.toISOString().split('T')[0]).eq('is_reconciled', true),
-    supabase.from('debts').select('name, original_amount, current_balance, interest_rate, due_date, status').eq('user_id', userId).eq('status', 'active'),
-    supabase.from('goals').select('name, target_amount, current_amount, target_date, status').eq('user_id', userId).eq('status', 'active'),
-    supabase.from('emergency_reserve').select('target_amount, current_amount').eq('user_id', userId).single(),
-    supabase.from('recurring_bills').select('name, amount, due_day, recurrence, category_id, categories(name)').eq('user_id', userId).eq('status', 'active'),
-    supabase.from('health_scores').select('total_score, grade, calculated_at').eq('user_id', userId).order('calculated_at', { ascending: false }).limit(2),
-  ]);
-
-  const txData = txResult.data || [];
-  const currentMonthTx = txData.filter(t => t.date >= monthStart);
-  const income = currentMonthTx.filter(t => t.type === 'income').reduce((s, t) => s + parseFloat(t.amount), 0);
-  const expenses = currentMonthTx.filter(t => t.type === 'expense').reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
-
-  // Spending by nature (Fixo/Variável/Futuro)
-  const byNature = {};
-  txData.filter(t => t.type === 'expense').forEach(t => {
-    const nature = t.categories?.nature || 'variavel';
-    byNature[nature] = (byNature[nature] || 0) + Math.abs(parseFloat(t.amount));
-  });
-
-  // Category breakdown for last 3 months
-  const byCategory = {};
-  txData.filter(t => t.type === 'expense').forEach(t => {
-    const cat = t.categories?.name || 'Outros';
-    byCategory[cat] = (byCategory[cat] || 0) + Math.abs(parseFloat(t.amount));
-  });
-
-  const healthScores = healthResult.data || [];
-
-  return {
-    currentMonth: now.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }),
-    currentMonthIncome: income,
-    currentMonthExpenses: expenses,
-    currentMonthBalance: income - expenses,
-    last3MonthsExpensesByCategory: byCategory,
-    expensesByNature: byNature,
-    activeDebts: (debtsResult.data || []).map(d => ({
-      name: d.name,
-      balance: d.current_balance,
-      rate: d.interest_rate,
-      dueDate: d.due_date,
-    })),
-    activeGoals: (goalsResult.data || []).map(g => ({
-      name: g.name,
-      target: g.target_amount,
-      current: g.current_amount,
-      progress: g.target_amount > 0 ? ((g.current_amount / g.target_amount) * 100).toFixed(1) + '%' : '0%',
-      dueDate: g.target_date,
-    })),
-    emergencyReserve: {
-      current: reserveResult.data?.current_amount || 0,
-      target: reserveResult.data?.target_amount || 0,
-    },
-    recurringBills: (recurringResult.data || []).map(r => ({
-      name: r.name,
-      amount: r.amount,
-      dueDay: r.due_day,
-      category: r.categories?.name,
-    })),
-    healthScore: healthScores[0] ? {
-      current: healthScores[0].total_score,
-      grade: healthScores[0].grade,
-      previous: healthScores[1]?.total_score ?? null,
-    } : null,
-  };
-}
-
-// ─── POST /api/ai/insights (with cache) ─────────────────────────────────────
+router.use(authenticate);
+router.get('/status', (_req, res) => res.json(getAIReadiness(aiOptions.env)));
+router.post('/plan', async (req, res) => {
+  try {
+    const { workspace: bodyWorkspace, fields } = scopedBody(req.body);
+    if (bodyWorkspace && req.query.workspace && bodyWorkspace !== req.query.workspace) throw new HTTPError(400, 'Espaços conflitantes.');
+    const { scenario, baseFingerprint, ...period } = planRequestSchema.parse(fields);
+    const workspace = bodyWorkspace ?? req.query.workspace;
+    // A plan distributes one workspace's hypothetical surplus, never a mixed pool.
+    const scope = await resolveScope(db, req.user.id, workspace);
+    if (!scope.id || scope.ids.length !== 1) throw new HTTPError(400, 'Selecione um espaço específico para calcular o plano.');
+    const context = await getFinancialContext(db, req.user.id, { ...period, workspace }, { scope });
+    if (baseFingerprint && baseFingerprint !== context.fingerprint) throw new HTTPError(409, 'Os dados mudaram desde o último plano. Recarregue a base e revise o cenário.');
+    res.json({ ...publicContext(context), ...await generateFinancialPlan(context, scenario, aiOptions), cached: false });
+  } catch (error) { handleError(res, error); }
+});
+// No user-only cache: each answer is rebuilt from the requested scope/period/version.
 router.post('/insights', async (req, res) => {
   try {
-    const userId = req.user.id;
-    const forceRefresh = req.query.force === 'true';
-
-    // 1. Check if cached insights are still fresh (no financial changes since last generation)
-    const { data: profile } = await supabase.from('profiles').select('needs_insight_recalc, last_insight_at').eq('id', userId).single();
-
-    if (!forceRefresh && profile && !profile.needs_insight_recalc && profile.last_insight_at) {
-      // Return the last cached insights
-      const { data: cached } = await supabase.from('ai_insights_cache').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(1).single();
-      if (cached) {
-        return res.json({ ...JSON.parse(cached.payload), cached: true, generatedAt: cached.created_at });
-      }
-    }
-
-    // 2. Build full context and generate fresh insights
-    const context = await buildFinancialContext(userId);
-    
-    // Add previous health score for evolutionary tips
-    const now = new Date();
-    const threeMonthsAgo = new Date();
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-    const txResult = await supabase.from('transactions').select('amount, type, date, categories(name)').eq('user_id', userId).gte('date', threeMonthsAgo.toISOString().split('T')[0]).eq('is_reconciled', true);
-    const txData = txResult.data || [];
-
-    const financialData = {
-      ...context,
-      period: '3 meses',
-      totalIncome: txData.filter(t => t.type === 'income').reduce((s, t) => s + parseFloat(t.amount), 0),
-      totalExpenses: txData.filter(t => t.type === 'expense').reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0),
-    };
-
-    const result = await generateInsights(financialData);
-
-    // 3. Cache the result and reset the dirty flag
-    await Promise.all([
-      supabase.from('ai_insights_cache').insert({ user_id: userId, payload: JSON.stringify(result) }),
-      supabase.from('profiles').update({ needs_insight_recalc: false, last_insight_at: new Date().toISOString() }).eq('id', userId),
-    ]);
-
-    res.json({ ...result, cached: false, generatedAt: new Date().toISOString() });
-  } catch (err) {
-    console.error('Insights error:', err);
-    res.status(500).json({ error: 'Erro ao gerar insights' });
-  }
+    const { workspace, fields } = scopedBody(req.body);
+    const context = await getFinancialContext(db, req.user.id, { ...fields, ...req.query, workspace: workspace ?? req.query.workspace });
+    const result = await generateInsights(context);
+    res.json({ ...publicContext(context), ...result, cached: false });
+  } catch (error) { handleError(res, error); }
 });
-
-// ─── POST /api/ai/chat (with full RAG context) ───────────────────────────────
 router.post('/chat', async (req, res) => {
   try {
-    const { message } = req.body;
-    if (!message) return res.status(400).json({ error: 'Mensagem é obrigatória' });
-
-    // Build full context (RAG) instead of just income/expenses
-    const context = await buildFinancialContext(req.user.id);
-
-    const response = await chatWithAssistant(message, context);
-    res.json({ message: response });
-  } catch (err) {
-    console.error('Chat error:', err);
-    res.status(500).json({ error: 'Erro no chat' });
-  }
+    const { workspace, fields } = scopedBody(req.body);
+    const message = z.string().trim().min(1).max(2000).parse(fields.message);
+    const context = await getFinancialContext(db, req.user.id, { ...fields, ...req.query, workspace: workspace ?? req.query.workspace });
+    res.json({ ...publicContext(context), ...await chatWithAssistant(message, context), cached: false });
+  } catch (error) { handleError(res, error); }
 });
-
-// ─── GET /api/ai/rules ────────────────────────────────────────────────────────
 router.get('/rules', async (req, res) => {
   try {
-    const { data, error } = await supabase.from('ai_rules').select('*, categories(name, icon)').eq('user_id', req.user.id).order('usage_count', { ascending: false });
-    if (error) throw error;
-
-    const stats = {
-      activeRules: data.filter(r => r.is_active).length,
-      totalApplications: data.reduce((s, r) => s + r.usage_count, 0),
-      totalRules: data.length,
-    };
-
-    res.json({ rules: data, stats });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao buscar regras da IA' });
-  }
+    const scope = await resolveScope(db, req.user.id, req.query.workspace);
+    const rows = await fetchAll(() => scopeQuery(db.from('ai_rules').select('*'), scope).order('id'));
+    const rules = await enrichFinancialRows(db, rows, scope);
+    res.json({ rules, stats: { activeRules: rules.filter(rule => rule.is_active).length,
+      totalApplications: rules.reduce((sum, rule) => sum + Number(rule.usage_count ?? 0), 0), totalRules: rules.length } });
+  } catch (error) { handleError(res, error); }
 });
-
-// ─── PUT /api/ai/rules/:id ───────────────────────────────────────────────────
 router.put('/rules/:id', async (req, res) => {
   try {
-    const { data, error } = await supabase.from('ai_rules').update(req.body).eq('id', req.params.id).eq('user_id', req.user.id).select().single();
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao atualizar regra' });
-  }
+    const row = await requireRecordAccess(db, 'ai_rules', req.params.id, req.user.id, 'write');
+    const { workspace, fields } = scopedBody(req.body);
+    if (workspace) {
+      const scope = await resolveScope(db, req.user.id, workspace, 'write');
+      if (scope.id !== row.workspace_id) throw new HTTPError(403, 'Não é permitido mover a regra para outro espaço.');
+    }
+    const updates = ruleSchema.partial().parse(fields);
+    if (!Object.keys(updates).length) throw new HTTPError(400, 'Nenhuma alteração informada.');
+    if (updates.category_id !== undefined) await assertCategoryAccess(db, updates.category_id, req.user.id, row.workspace_id);
+    res.json(await mutate(db, req.user.id, 'ai_rules', 'update', row.workspace_id, updates, row.id));
+  } catch (error) { handleError(res, error); }
 });
-
-// ─── DELETE /api/ai/rules/:id ────────────────────────────────────────────────
 router.delete('/rules/:id', async (req, res) => {
   try {
-    const { error } = await supabase.from('ai_rules').delete().eq('id', req.params.id).eq('user_id', req.user.id);
-    if (error) throw error;
+    const row = await requireRecordAccess(db, 'ai_rules', req.params.id, req.user.id, 'write');
+    await mutate(db, req.user.id, 'ai_rules', 'delete', row.workspace_id, {}, row.id);
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao excluir regra' });
-  }
+  } catch (error) { handleError(res, error); }
 });
-
-export default router;
+return router;
+}
+export default createAIRouter();

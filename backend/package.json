@@ -6,7 +6,11 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js",
+    "test:sql": "node scripts/test-sql.mjs",
+    "migrate:plan": "node scripts/migrate.mjs",
+    "migrate:apply": "node scripts/migrate.mjs --apply"
   },
   "keywords": [],
   "author": "",
@@ -15,16 +19,23 @@
     "@supabase/supabase-js": "^2.100.1",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.1",
     "helmet": "^8.1.0",
     "multer": "^2.1.1",
-    "ofx-js": "^0.2.0",
     "pdf-parse": "^1.1.1",
     "pluggy-sdk": "^0.83.0",
     "resend": "^6.9.4",
-    "stripe": "^21.0.1",
-    "xlsx": "^0.18.5",
+    "stripe": "^23.0.0",
     "zod": "^4.3.6"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
+  },
+  "devDependencies": {
+    "pg": "^8.23.1"
   }
 }

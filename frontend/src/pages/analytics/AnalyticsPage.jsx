@@ -1,4 +1,6 @@
-import { useState, useMemo } from 'react';
+import DataError from '../../components/ui/DataError';
+import { useAuth } from '../../context/AuthContext';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import api from '../../services/api';
@@ -12,15 +14,24 @@ import Chart from 'react-apexcharts';
 
 const CATEGORY_COLORS = ['#d4a843', '#8b5cf6', '#22c55e', '#f43f5e', '#3b82f6', '#f59e0b', '#ec4899', '#06b6d4', '#64748b', '#f97316'];
 
+const EmptyPanel = ({ icon, title, desc }) => (
+    <div className="card" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
+      <div style={{ fontSize: '3rem', marginBottom: '1rem', opacity: 0.5 }}>{icon}</div>
+      <h3 style={{ fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>{title}</h3>
+      <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: '100%', margin: '0 auto' }}>{desc}</p>
+    </div>
+  );
+
 export default function AnalyticsPage() {
   const [activeTab, setActiveTab] = useState('overview');
   const { currentWorkspace } = useWorkspace();
+  const { user } = useAuth();
 
   // Buscar dados reais do dashboard (que já tem stats + evolução + categorias)
-  const { data: dashData, isLoading: loadingDash } = useQuery({
-    queryKey: ['analytics-dashboard', currentWorkspace],
+  const { data: dashData, isLoading: loadingDash, error, refetch } = useQuery({
+    queryKey: ['analytics-dashboard', user?.id, currentWorkspace],
     queryFn: async () => {
-      const params = {};
+      const params = { period: 'month' };
       if (currentWorkspace !== 'all') params.workspace = currentWorkspace;
       return await api.getDashboard(params);
     },
@@ -29,7 +40,7 @@ export default function AnalyticsPage() {
 
   // Buscar dados do mês anterior para comparativo
   const { data: prevData } = useQuery({
-    queryKey: ['analytics-prev', currentWorkspace],
+    queryKey: ['analytics-prev', user?.id, currentWorkspace],
     queryFn: async () => {
       const params = { period: 'prev_month' };
       if (currentWorkspace !== 'all') params.workspace = currentWorkspace;
@@ -40,7 +51,7 @@ export default function AnalyticsPage() {
 
   // Health Score
   const { data: healthData } = useQuery({
-    queryKey: ['analytics-health'],
+    queryKey: ['analytics-health', user?.id, currentWorkspace],
     queryFn: () => api.getHealthScore().catch(() => null),
     staleTime: 1000 * 60 * 10
   });
@@ -53,11 +64,12 @@ export default function AnalyticsPage() {
     monthLabel: new Date(m.month + '-01T12:00:00Z').toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }),
   }));
 
-  const healthScore = healthData?.latest?.total_score ?? dashData?.healthScore?.total_score ?? 0;
+  const healthScore = healthData?.latest?.total_score ?? dashData?.healthScore?.total_score ?? null;
   const healthGrade = healthData?.latest?.grade ?? dashData?.healthScore?.grade ?? '-';
 
   // Métricas calculadas
-  const savingsRate = stats.income > 0 ? ((stats.income - stats.expenses) / stats.income * 100) : 0;
+  const savingsRate = stats.savingsRate ?? null;
+  const donutCategories = byCategory.filter(category => category.total > 0);
   const incomeVariation = prevStats.income > 0 ? ((stats.income - prevStats.income) / prevStats.income * 100) : 0;
   const expenseVariation = prevStats.expenses > 0 ? ((stats.expenses - prevStats.expenses) / prevStats.expenses * 100) : 0;
   const totalCategories = byCategory.length;
@@ -65,30 +77,25 @@ export default function AnalyticsPage() {
   const totalExpenses = byCategory.reduce((s, c) => s + c.total, 0);
 
   // Dados para gráfico radial de savings rate
-  const savingsRadial = [{ name: 'Taxa', value: Math.max(0, savingsRate), fill: savingsRate >= 20 ? '#22c55e' : savingsRate >= 10 ? '#f59e0b' : '#f43f5e' }];
 
   // Empty state component
-  const EmptyPanel = ({ icon, title, desc }) => (
-    <div className="card" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
-      <div style={{ fontSize: '3rem', marginBottom: '1rem', opacity: 0.5 }}>{icon}</div>
-      <h3 style={{ fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>{title}</h3>
-      <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: '100%', margin: '0 auto' }}>{desc}</p>
-    </div>
-  );
+
 
   const hasData = stats.income > 0 || stats.expenses > 0;
 
+  if (loadingDash) return <p role="status">Carregando indicadores…</p>;
+  if (error) return <DataError error={error} onRetry={refetch} />;
   return (
     <div>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
         <div className="page-header" style={{ marginBottom: 0 }}>
           <h1>Análise Avançada</h1>
-          <p>Indicadores financeiros, comparativos e evolução patrimonial</p>
+          <p>Indicadores deste mês; comparação com o mês anterior e histórico disponível</p>
         </div>
         <div className="page-header-actions">
-          <button className="btn btn-secondary btn-sm"><Download size={14} /> Exportar PDF</button>
-          <button className="btn btn-secondary btn-sm"><Download size={14} /> Exportar CSV</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => window.print()}><Download size={14} /> Imprimir / PDF</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => { const lines = [['categoria', 'total'], ...byCategory.map(c => [c.name, c.total])]; const csv = lines.map(row => row.map(v => `"${String(v).replaceAll('"', '""')}"`).join(';')).join('\n'); const url = URL.createObjectURL(new Blob(['\ufeff', csv], { type: 'text/csv;charset=utf-8' })); const a = document.createElement('a'); a.href = url; a.download = 'lume-categorias.csv'; a.click(); URL.revokeObjectURL(url); }}><Download size={14} /> Exportar CSV</button>
         </div>
       </div>
 
@@ -124,16 +131,16 @@ export default function AnalyticsPage() {
               icon={<TrendingDown size={18} />}
             />
             <StatCard
-              label="Resultado Líquido"
+              label="Saldo das contas"
               value={formatCurrency(stats.balance)}
-              sub={stats.balance >= 0 ? 'saldo positivo' : 'alerta: déficit'}
+              sub={stats.balance == null ? 'Saldo-base não confirmado' : stats.balance >= 0 ? 'saldo positivo' : 'alerta: déficit'}
               variant={stats.balance >= 0 ? 'balance' : 'expense'}
               icon={<Scale size={18} />}
             />
             <StatCard
               label="Taxa de Poupança"
-              value={`${savingsRate.toFixed(1)}%`}
-              sub={savingsRate >= 20 ? '🟢 Excelente' : savingsRate >= 10 ? '🟡 Regular' : savingsRate > 0 ? '🟠 Baixa' : '🔴 Sem poupança'}
+              value={savingsRate == null ? 'Não calculado' : `${savingsRate.toFixed(1)}%`}
+              sub={savingsRate == null ? 'Renda insuficiente para calcular' : savingsRate >= 20 ? '🟢 Excelente' : savingsRate >= 10 ? '🟡 Regular' : savingsRate > 0 ? '🟠 Baixa' : '🔴 Sem poupança'}
               variant={savingsRate >= 10 ? 'savings' : 'neutral'}
               icon={<PiggyBank size={18} />}
             />
@@ -152,7 +159,7 @@ export default function AnalyticsPage() {
                   width: 64, height: 64, borderRadius: '50%', background: 'var(--bg-card)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column'
                 }}>
-                  <span style={{ fontSize: '1.5rem', fontWeight: 800, color: healthScore >= 60 ? 'var(--color-success)' : healthScore >= 40 ? 'var(--color-warning)' : 'var(--color-danger)' }}>{healthScore}</span>
+                  <span style={{ fontSize: '1.5rem', fontWeight: 800, color: healthScore >= 60 ? 'var(--color-success)' : healthScore >= 40 ? 'var(--color-warning)' : 'var(--color-danger)' }}>{healthScore ?? '—'}</span>
                   <span style={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>{healthGrade}</span>
                 </div>
               </div>
@@ -204,9 +211,9 @@ export default function AnalyticsPage() {
                     colors: ['#22c55e', '#f43f5e', '#facc15'],
                     fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05, stops: [0, 100] } },
                     dataLabels: { enabled: false },
-                    stroke: { curve: evolution.length >= 2 ? 'straight', width: [2, 2, 2], dashArray: [0, 0, 5] },
+                    stroke: { curve: 'straight', width: [2, 2, 2], dashArray: [0, 0, 5] },
                     xaxis: { categories: evolution.map(d => d.monthLabel), axisBorder: { show: false }, axisTicks: { show: false }, labels: { style: { colors: '#94a3b8' } } },
-                    yaxis: { 
+                    yaxis: {
                       labels: { formatter: (val) => typeof val === 'number' ? formatCurrency(val, true) : val, style: { colors: '#94a3b8' } },
                       ...(evolution.length > 0 && Math.max(...evolution.map(d => Number(d.balance || 0))) === Math.min(...evolution.map(d => Number(d.balance || 0))) ? { min: Math.min(...evolution.map(d => Number(d.balance || 0))) - 1000, max: Math.max(...evolution.map(d => Number(d.balance || 0))) + 1000 } : {})
                     },
@@ -318,15 +325,15 @@ export default function AnalyticsPage() {
                       options={{
                         chart: { type: 'donut', background: 'transparent', fontFamily: 'inherit' },
                         theme: { mode: 'dark' },
-                        labels: byCategory.map(c => c.name),
-                        colors: byCategory.map((c, i) => c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length]),
+                        labels: donutCategories.map(c => c.name),
+                        colors: donutCategories.map((c, i) => c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length]),
                         plotOptions: { pie: { donut: { size: '65%', labels: { show: true, name: { show: true }, value: { show: true, formatter: (val) => formatCurrency(val) }, total: { show: true, label: 'Total', formatter: (w) => formatCurrency(w.globals.seriesTotals.reduce((a, b) => a + b, 0)) } } } } },
                         dataLabels: { enabled: false },
                         stroke: { show: true, colors: ['#0f172a'], width: 2 },
                         legend: { show: false },
                         tooltip: { theme: 'dark', y: { formatter: (val) => formatCurrency(val) } }
                       }}
-                      series={byCategory.map(c => Number(c.total || 0))}
+                      series={donutCategories.map(c => Number(c.total))}
                       type="donut"
                       height="100%"
                       width="100%"
@@ -404,11 +411,11 @@ export default function AnalyticsPage() {
                     display: 'flex', alignItems: 'center', justifyContent: 'center'
                   }}>
                     <div style={{ width: 96, height: 96, borderRadius: '50%', background: 'var(--bg-card)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <span style={{ fontSize: '1.75rem', fontWeight: 800, color: savingsRate >= 20 ? '#22c55e' : savingsRate >= 10 ? '#f59e0b' : '#f43f5e' }}>{savingsRate.toFixed(0)}%</span>
+                      <span style={{ fontSize: '1.75rem', fontWeight: 800, color: savingsRate >= 20 ? '#22c55e' : savingsRate >= 10 ? '#f59e0b' : '#f43f5e' }}>{savingsRate == null ? '—' : `${savingsRate.toFixed(0)}%`}</span>
                     </div>
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    {savingsRate >= 20 ? 'Excelente! Acima de 20%' : savingsRate >= 10 ? 'Regular. Meta: acima de 20%' : 'Atenção: invista em economizar mais'}
+                    {savingsRate == null ? 'Dados insuficientes' : savingsRate >= 20 ? 'Excelente! Acima de 20%' : savingsRate >= 10 ? 'Regular. Meta: acima de 20%' : 'Atenção: invista em economizar mais'}
                   </div>
                 </div>
 
@@ -440,7 +447,7 @@ export default function AnalyticsPage() {
                     display: 'flex', alignItems: 'center', justifyContent: 'center'
                   }}>
                     <div style={{ width: 96, height: 96, borderRadius: '50%', background: 'var(--bg-card)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
-                      <span style={{ fontSize: '1.75rem', fontWeight: 800, color: healthScore >= 60 ? '#22c55e' : healthScore >= 40 ? '#f59e0b' : '#f43f5e' }}>{healthScore}</span>
+                      <span style={{ fontSize: '1.75rem', fontWeight: 800, color: healthScore >= 60 ? '#22c55e' : healthScore >= 40 ? '#f59e0b' : '#f43f5e' }}>{healthScore ?? '—'}</span>
                       <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)' }}>{healthGrade}</span>
                     </div>
                   </div>
@@ -457,8 +464,8 @@ export default function AnalyticsPage() {
                   {[
                     { label: 'Total de Receitas', value: formatCurrency(stats.income), color: 'var(--color-success)' },
                     { label: 'Total de Despesas', value: formatCurrency(stats.expenses), color: 'var(--color-danger)' },
-                    { label: 'Resultado Líquido', value: formatCurrency(stats.balance), color: stats.balance >= 0 ? 'var(--accent-gold)' : 'var(--color-danger)' },
-                    { label: 'Taxa de Poupança', value: `${savingsRate.toFixed(1)}%`, color: savingsRate >= 10 ? 'var(--color-success)' : 'var(--color-danger)' },
+                    { label: 'Resultado do período', value: formatCurrency(stats.periodBalance), color: stats.balance >= 0 ? 'var(--accent-gold)' : 'var(--color-danger)' },
+                    { label: 'Taxa de Poupança', value: savingsRate == null ? 'Não calculado' : `${savingsRate.toFixed(1)}%`, color: savingsRate >= 10 ? 'var(--color-success)' : 'var(--color-danger)' },
                     { label: 'Categorias de Gasto', value: String(totalCategories), color: 'var(--text-primary)' },
                     { label: 'Maior Gasto', value: topExpenseCategory ? `${topExpenseCategory.name}: ${formatCurrency(topExpenseCategory.total)}` : '-', color: 'var(--color-warning)' },
                   ].map((item, i) => (

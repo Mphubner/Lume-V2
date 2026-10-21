@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import ConfirmationNotice from '../../components/auth/ConfirmationNotice';
+import { authDestination, authErrorMessage, authLink, hasConfirmedEmail, MIN_PASSWORD_LENGTH } from '../../services/auth';
 import { Sun, Mail, Lock, Eye, EyeOff, User, ArrowRight } from 'lucide-react';
 
 const GoogleIcon = () => (
@@ -13,30 +15,32 @@ const GoogleIcon = () => (
 );
 
 export default function RegisterPage() {
-  const { signUp, signIn } = useAuth();
+  const { user, loading: authLoading, authConfigured, signUp, signIn, googleAuthEnabled } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
+  const next = authDestination(location);
   const [form, setForm] = useState({ fullName: '', email: '', password: '', confirmPassword: '' });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
+  const [result, setResult] = useState('');
 
   const set = (field, value) => setForm({ ...form, [field]: value });
 
   const validate = () => {
     if (!form.fullName.trim()) return 'Informe seu nome completo';
     if (!form.email.trim()) return 'Informe seu email';
-    if (form.password.length < 6) return 'A senha deve ter pelo menos 6 caracteres';
+    if (form.password.length < MIN_PASSWORD_LENGTH) return 'A senha deve ter pelo menos 8 caracteres';
     if (form.password !== form.confirmPassword) return 'As senhas não coincidem';
     return null;
   };
 
   const handleGoogleSignup = () => {
     setLoading(true);
-    signIn('google').catch((err) => { 
-      console.error(err);
-      setError(`Erro ao cadastrar com Google: ${err.message || 'Bloqueado pelo navegador'}`); 
-      setLoading(false); 
+    setError('');
+    signIn('google', next).catch((err) => {
+      setError(authErrorMessage(err));
+      setLoading(false);
     });
   };
 
@@ -47,16 +51,18 @@ export default function RegisterPage() {
     setLoading(true);
     setError('');
     try {
-      await signUp(form.email, form.password, form.fullName);
-      setSuccess(true);
+      const data = await signUp(form.email.trim(), form.password, form.fullName.trim(), next);
+      if (data.status === 'authenticated') navigate(next, { replace: true });
+      else setResult(data.status);
+      setForm(current => ({ ...current, password: '', confirmPassword: '' }));
     } catch (err) {
-      if (err.message.includes('already registered')) setError('Este email já está cadastrado. Faça login.');
-      else setError('Erro ao criar conta. Tente novamente.');
-      setLoading(false);
-    }
+      setError(authErrorMessage(err, 'signup'));
+    } finally { setLoading(false); }
   };
 
-  if (success) {
+  if (!authLoading && hasConfirmedEmail(user)) return <Navigate to={next} replace />;
+
+  if (result) {
     return (
       <div className="auth-page">
         <div className="auth-bg-pattern" />
@@ -64,14 +70,15 @@ export default function RegisterPage() {
           <div className="auth-form-panel">
             <div className="auth-form-wrapper" style={{ textAlign: 'center' }}>
               <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>📧</div>
-              <h2 style={{ marginBottom: '0.5rem' }}>Verifique seu email</h2>
+              <h2 style={{ marginBottom: '0.5rem' }}>{result === 'existing_account' ? 'Continue com seu email' : 'Confirme seu email'}</h2>
               <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', lineHeight: 1.6 }}>
-                Enviamos um link de confirmação para <strong style={{ color: 'var(--accent-gold)' }}>{form.email}</strong>.
-                <br />Clique no link para ativar sua conta.
+                {result === 'existing_account' ? 'Se você já tem conta com este email, faça login ou recupere a senha. Nenhum novo envio de confirmação foi informado.' : 'Solicitação de cadastro recebida. Se este email estiver disponível para cadastro, use o link de confirmação para ativar sua conta.'}
               </p>
-              <Link to="/login" className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center' }}>
+              <ConfirmationNotice email={form.email.trim()} next={next} />
+              <Link to={authLink('/login', next)} className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center' }}>
                 Voltar para o Login
               </Link>
+              <p style={{ marginTop: '1rem' }}><Link to={authLink('/esqueci-senha', next)} className="auth-link">Recuperar ou definir senha</Link></p>
             </div>
           </div>
         </div>
@@ -86,7 +93,7 @@ export default function RegisterPage() {
         <div className="auth-form-panel">
           <div className="auth-form-wrapper">
             <div className="auth-form-header">
-              <Link to="/login" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.85rem' }}>
+              <Link to={authLink('/login', next)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.85rem' }}>
                 ← Voltar para login
               </Link>
               <div className="auth-logo-small"><Sun size={28} strokeWidth={1.5} /><span>Lume</span></div>
@@ -94,51 +101,52 @@ export default function RegisterPage() {
               <p>Comece a organizar suas finanças hoje</p>
             </div>
 
-            {error && <div className="auth-error">{error}</div>}
+            {error && <div className="auth-error" role="alert">{error}</div>}
+            {authConfigured === false ? <div className="auth-error" role="alert">O cadastro está temporariamente indisponível neste ambiente. Tente novamente mais tarde.</div> : null}
 
-            <button className="auth-google-btn" onClick={handleGoogleSignup} disabled={loading}>
+            {googleAuthEnabled ? <><button type="button" className="auth-google-btn" onClick={handleGoogleSignup} disabled={loading}>
               <GoogleIcon />
               <span>Cadastrar com Google</span>
             </button>
 
-            <div className="auth-divider"><span>ou cadastre com email</span></div>
+            <div className="auth-divider"><span>ou cadastre com email</span></div></> : null}
 
             <form onSubmit={handleSubmit} className="auth-form">
               <div className="auth-field">
                 <User size={18} className="auth-field-icon" />
-                <input type="text" placeholder="Nome completo" value={form.fullName} onChange={e => set('fullName', e.target.value)} autoComplete="name" />
+                <input type="text" aria-label="Nome completo" placeholder="Nome completo" value={form.fullName} onChange={e => set('fullName', e.target.value)} autoComplete="name" required />
               </div>
               <div className="auth-field">
                 <Mail size={18} className="auth-field-icon" />
-                <input type="email" placeholder="seu@email.com" value={form.email} onChange={e => set('email', e.target.value)} autoComplete="email" />
+                <input type="email" aria-label="seu@email.com" placeholder="seu@email.com" value={form.email} onChange={e => set('email', e.target.value)} autoComplete="email" required />
               </div>
               <div className="auth-field">
                 <Lock size={18} className="auth-field-icon" />
-                <input type={showPassword ? 'text' : 'password'} placeholder="Crie uma senha (min. 6 chars)" value={form.password} onChange={e => set('password', e.target.value)} autoComplete="new-password" />
-                <button type="button" className="auth-field-toggle" onClick={() => setShowPassword(!showPassword)}>
+                <input type={showPassword ? 'text' : 'password'} aria-label="Crie uma senha (mínimo 8 caracteres)" placeholder="Crie uma senha (mínimo 8 caracteres)" value={form.password} onChange={e => set('password', e.target.value)} autoComplete="new-password" minLength={MIN_PASSWORD_LENGTH} required />
+                <button type="button" aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"} className="auth-field-toggle" onClick={() => setShowPassword(!showPassword)}>
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
               <div className="auth-field">
                 <Lock size={18} className="auth-field-icon" />
-                <input type="password" placeholder="Confirme a senha" value={form.confirmPassword} onChange={e => set('confirmPassword', e.target.value)} autoComplete="new-password" />
+                <input type="password" aria-label="Confirme a senha" placeholder="Confirme a senha" value={form.confirmPassword} onChange={e => set('confirmPassword', e.target.value)} autoComplete="new-password" required />
               </div>
 
               {form.password && (
                 <div className="auth-password-strength">
-                  <div className={`strength-bar ${form.password.length >= 8 ? 'strong' : form.password.length >= 6 ? 'medium' : 'weak'}`} />
-                  <span>{form.password.length >= 8 ? '✅ Senha forte' : form.password.length >= 6 ? '⚠️ Senha ok' : '❌ Muito curta'}</span>
+                  <div className={`strength-bar ${form.password.length >= MIN_PASSWORD_LENGTH ? 'medium' : 'weak'}`} />
+                  <span>{form.password.length >= MIN_PASSWORD_LENGTH ? 'Mínimo de 8 caracteres atendido' : 'Use pelo menos 8 caracteres'}</span>
                 </div>
               )}
 
-              <button type="submit" className="auth-submit-btn" disabled={loading}>
+              <button type="submit" className="auth-submit-btn" disabled={loading || authConfigured === false}>
                 {loading ? <span className="spinner" style={{ width: 20, height: 20 }} /> : <><span>Criar conta</span><ArrowRight size={18} /></>}
               </button>
             </form>
 
             <div className="auth-footer">
               <span>Já tem uma conta?</span>
-              <Link to="/login" className="auth-link-strong">Fazer login</Link>
+              <Link to={authLink('/login', next)} className="auth-link-strong">Fazer login</Link>
             </div>
           </div>
         </div>

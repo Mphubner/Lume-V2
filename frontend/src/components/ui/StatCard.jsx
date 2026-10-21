@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { motion as Motion } from 'framer-motion';
 import { AlertTriangle } from 'lucide-react';
 
 const cardVariants = {
@@ -18,7 +18,7 @@ const cardVariants = {
 
 export default function StatCard({ label, value, sub, icon, variant = 'neutral', className = '', index = 0, alert: hasAlert = false, onClick }) {
   return (
-    <motion.div
+    <Motion.div
       className={`stat-card ${variant} ${className} ${hasAlert ? 'stat-card-alert' : ''}`}
       custom={index}
       variants={cardVariants}
@@ -30,18 +30,18 @@ export default function StatCard({ label, value, sub, icon, variant = 'neutral',
       style={onClick ? { cursor: 'pointer' } : {}}
     >
       {hasAlert && (
-        <motion.div
+        <Motion.div
           className="stat-card-alert-icon"
           animate={{ scale: [1, 1.2, 1] }}
           transition={{ duration: 2, repeat: Infinity }}
         >
           <AlertTriangle size={16} />
-        </motion.div>
+        </Motion.div>
       )}
       {icon && <div className="stat-card-icon">{icon}</div>}
       <div className="stat-card-label">{label}</div>
       <div className="stat-card-value">{value}</div>
       {sub && <div className="stat-card-sub">{sub}</div>}
-    </motion.div>
+    </Motion.div>
   );
 }
