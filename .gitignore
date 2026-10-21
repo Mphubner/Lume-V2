@@ -37,3 +37,6 @@ yarn-error.log*
 frontend-lint-implementation.json
 *.dump
 SecurityData_*.xlsx
+
+# Private local launch state, process identities, dependency receipts and logs.
+.lume-local/

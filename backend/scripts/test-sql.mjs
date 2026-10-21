@@ -17,6 +17,11 @@ try{
  db=new Client({connectionString:url.href});await db.connect();
  db.on('notice',n=>{if(n.severity==='WARNING')console.error(n.message);});
  await db.query(await readFile(path.join(root,'backend/test/sql/bootstrap.sql'),'utf8'));
+ if(process.argv.includes('--extensions-schema')){
+  // Mirror Supabase's extension namespace while keeping fixture hashing usable.
+  // SECURITY DEFINER RPCs retain their own public,pg_temp search path.
+  await db.query('CREATE SCHEMA extensions; CREATE EXTENSION pgcrypto WITH SCHEMA extensions; SET search_path=public,extensions');
+ }
  const legacy=process.argv.includes('--legacy-schema');
  await db.query(await readFile(path.join(root,legacy?'backend/test/fixtures/legacy-production-schema.sql':'supabase/schema.sql'),'utf8'));
  await runMigrations(db,{apply:true});

@@ -2,18 +2,49 @@
 
 ## Condição atual
 
-Alterações locais preparadas para homologação. Testes com dados sintéticos não comprovam Supabase Auth/Storage remoto, entrega de convites, cobrança Stripe ou funcionamento em produção. Não há migração automática no início do servidor.
+Em 21/10/2026, as nove migrações foram aplicadas ao projeto Supabase `sqpowenxoqccjigdktwb`, com dispensa expressa de backup pelo responsável porque os registros são de teste. A verificação posterior confirmou schema `202610210009`, nove registros no ledger de migrações, RLS em todas as tabelas públicas e preservação dos 700 lançamentos e dois perfis existentes. As evidências locais desta operação ficam em `D:\Lume\validacao-2026-10-21`.
+
+Essa verificação não comprova publicação da nova API/frontend, entrega de confirmação por email, chamadas reais de IA ou fluxos autenticados completos. Não há migração automática no início do servidor. Os relatórios de 20/10/2026 descrevem a situação anterior à aplicação remota e permanecem como histórico.
+
+O frontend e a API também foram iniciados localmente, consumindo esse Supabase real. `/health` e `/ready` responderam 200, com schema `202610210009` e worker habilitado. Isso comprova a conexão e a prontidão desses processos; o aceite de login confirmado e dos fluxos financeiros autenticados continua separado.
 
 ## Sequência de implantação
 
-1. Crie projeto de homologação separado, com confirmação de e-mail e URLs de retorno para `/auth/callback**`, `/login`, `/dashboard`, `/resetar-senha` e `/convite`. Configure SMTP próprio conforme [acesso por email](AUTH_EMAIL_SETUP.md). Nunca use dados financeiros reais no teste inicial.
-2. Faça backup do banco existente e dos objetos Storage. Verifique a restauração em projeto separado e registre horário, responsável, contagem de linhas e saldos amostrais. O plano gratuito não substitui uma rotina de backup e recuperação.
+1. Confira o projeto de destino, confirmação de email e URLs de retorno para `/auth/callback**`, `/login`, `/dashboard`, `/resetar-senha` e `/convite`. O piloto atual usa o projeto existente com dados de teste, conforme autorização do responsável. Configure SMTP próprio conforme [acesso por email](AUTH_EMAIL_SETUP.md). Separe homologação antes de introduzir finanças reais.
+2. Para futuras alterações em bases com dados reais, faça backup do banco e dos objetos Storage e verifique a restauração em projeto separado. Registre horário, responsável, contagens e saldos amostrais. Na operação de 21/10/2026, a dispensa de backup para os dados de teste foi autorizada expressamente; nenhum comprovante fictício foi fornecido ao migrador.
 3. Suspenda escritas e uploads durante a janela de migração. Rode `npm run migrate:plan` em `backend`, usando `DATABASE_URL` no ambiente. O plano lista versões pendentes sem aplicar alterações.
 4. Antes de aplicar em destino remoto, configure `MIGRATION_BACKUP_PATH` para arquivo local não vazio e `CONFIRM_MIGRATION_TARGET` com `host/nome_do_banco` exatos. Execute `npm run migrate:apply`. A conexão remota exige TLS verificado. Cada migração e seu checksum são registrados na mesma transação, com bloqueio contra execução concorrente.
 5. Para um projeto totalmente vazio, o schema inicial `supabase/schema.sql` é apenas uma base: instale-o e aplique todas as migrações antes de disponibilizar qualquer cliente. Em banco existente, não execute esse schema de novo. A migração preserva registros históricos e marca inconsistências para revisão; não inventa saldo-base.
-6. Confira funções RPC e privilégios de `anon`, `authenticated` e `service_role`, bucket privado `financial-imports`, limite de 20 MB e todas as migrações até `202610200008`. A versão de `/ready` deve ser `202610200008`. A migração 008 também trata permissões do cache legado e a identidade de assinaturas existente no projeto real; duplicidade de ID externo aborta sem apagar registros. Recarregue o cache do PostgREST se necessário. Nunca use chave service-role no frontend.
+6. Confira funções RPC e privilégios de `anon`, `authenticated` e `service_role`, bucket privado `financial-imports`, limite de 20 MB e todas as migrações até `202610210009`. A versão de `/ready` deve ser `202610210009`. A migração 008 trata permissões do cache legado e a identidade de assinaturas existente no projeto real; duplicidade de ID externo aborta sem apagar registros. A 009 resolve o namespace `extensions` do `pgcrypto` observado no Supabase e protege o ledger de migrações com RLS. Recarregue o cache do PostgREST se necessário. Nunca use chave service-role no frontend.
 7. Publique API e frontend compatíveis na mesma janela. Configure `FRONTEND_URL` com origens exatas; `TRUST_PROXY_HOPS` deve corresponder aos proxies reais da hospedagem. `/health` indica processo vivo; `/ready` exige schema esperado, banco acessível e worker sem falhas consecutivas.
 8. Execute o roteiro de homologação abaixo antes de liberar a família. Somente depois habilite cobrança ou conexão externa que tenha sido efetivamente homologada.
+
+## Hospedagens existentes
+
+O frontend está no projeto Cloudflare Pages `lumefinance`, conectado a `Mphubner/Lume-V2`, branch de produção `main`. O diretório raiz é `frontend`, o comando de build é `npm run build` e a saída é `dist`. Em 21/10/2026, `NODE_VERSION=22.20.0` foi salvo no painel, substituindo o valor 20 encontrado na inspeção. A alteração da configuração não comprova um novo build publicado. As variáveis `VITE_` entram no bundle durante o build e exigem nova publicação quando alteradas.
+
+| Variável do frontend | Valor/configuração |
+| --- | --- |
+| `VITE_API_URL` | `https://existing-gretal-lumefin-08b40031.koyeb.app/api` |
+| `VITE_SUPABASE_URL` | `https://sqpowenxoqccjigdktwb.supabase.co` |
+| `VITE_SUPABASE_ANON_KEY` | Chave pública do mesmo projeto; nunca `service_role` |
+| `VITE_GOOGLE_AUTH_ENABLED` | `false` |
+
+A API existente está no Koyeb, serviço `22b87336-3f76-48d9-8c78-1ebe7f7b5f92`. A inspeção do domínio público anterior à publicação desta revisão respondeu versão 1.0.0 em `/health` e não possuía `/ready`; uma integração Git existente não comprova que o código novo já foi publicado.
+
+Para publicar com OCR, o contexto de build deve ser `backend`, usando seu `Dockerfile`. Construir esse arquivo com o contexto na raiz do repositório quebra os caminhos `COPY`. O processo expõe a porta 5001 por padrão e deve escutar em todas as interfaces no host; `LISTEN_HOST=127.0.0.1` é reservado ao ambiente local. Use o comando `node src/server.js` quando a hospedagem usar buildpack; essa modalidade só disponibiliza OCR se os motores nativos também tiverem sido instalados.
+
+No backend, configure `NODE_ENV=production`, as credenciais Supabase no servidor, `FRONTEND_URL=https://lumefin.com.br` e `IMPORT_WORKER_ENABLED=true`. Caso ofereça também o domínio Pages ao usuário, acrescente sua origem HTTPS exata à lista separada por vírgulas. Não use curingas para previews. Ajuste `TRUST_PROXY_HOPS` somente depois de confirmar a cadeia de proxy do serviço. Mantenha `BILLING_ENABLED=false`. Nenhuma senha SMTP precisa estar no backend: os emails de autenticação são enviados pelo Supabase.
+
+Depois do deploy, confirme `/health` com versão 2.1.0 e `/ready` com schema `202610210009`, status 200 e worker habilitado. Teste diretamente `/auth/callback` e `/planejador` no domínio publicado, além de uma requisição da interface para a API; isso valida também o fallback das rotas e CORS. Cloudflare Pages e Koyeb são implantações independentes: aguarde ambas concluírem, confira o commit publicado e não confunda o sucesso de uma com o sucesso da outra.
+
+Configuração oficial: [build do Cloudflare Pages](https://developers.cloudflare.com/pages/configuration/build-configuration/).
+
+## Provedor de IA
+
+O provedor existente é Groq, distinto de xAI/Grok. O servidor aceita `GROQ_API_KEYS` em CSV ou array JSON, além de `GROQ_API_KEY` e da variável legada `AI_API_KEY`, sem repetir chaves iguais. Use `AI_ENABLED=true`, `AI_PROVIDER=groq` e um `AI_MODEL` disponível na organização. Segredos ficam somente no ambiente do backend. Confirme a disponibilidade real do modelo e a resposta antes de apresentar o provedor como validado.
+
+Credenciais rejeitadas podem avançar para outra chave válida. Um limite de tokens compartilhado pela organização/projeto suspende as tentativas pelo prazo informado pelo provedor; várias chaves da mesma organização não multiplicam a franquia gratuita. Durante essa indisponibilidade, o planejador continua com cálculos e orientação determinísticos, identificando a limitação da apresentação por IA. [Limites oficiais do Groq](https://console.groq.com/docs/rate-limits).
 
 ## Roteiro com duas identidades de teste
 
@@ -44,7 +75,9 @@ CSV, OFX, TXT tabular e XLSX simples de uma aba preservam sinal, centavos, datas
 
 OCR é opcional e local: exige Tesseract com português e Poppler, com caminhos absolutos definidos em `backend/.env.example`. Limita PDF digitalizado a 20 páginas, cada processo a 20 segundos e a etapa OCR a 120 segundos; baixa confiança bloqueia o documento. Imagens PNG/JPEG têm limites de dimensões e tamanho. `/api/import/capabilities` informa o que está instalado; sem os motores, a interface explica a indisponibilidade. Não há envio de documentos para OCR externo.
 
-`backend/Dockerfile` prepara essas dependências em Linux e roda o servidor sem root. Construa a partir de `backend`, fornecendo segredos somente no ambiente de execução. Esse Dockerfile não foi construído nesta máquina, que não possui Docker nem Tesseract; o processamento OCR completo ainda exige homologação no host escolhido. A hospedagem precisa comportar a memória dos workers, os processos nativos e o tempo de execução. XLSX roda isolado com limite de memória/prazo e tamanho descompactado; capacidade de processamento não é promessa de execução contínua em hospedagem suspensa.
+No Windows local, Tesseract 5.4.0.20240606 foi instalado em `C:\Program Files\Tesseract-OCR`, com modelo português e Poppler configurados. A extração nativa real de uma imagem PNG e de um PDF digitalizado sintéticos preservou datas, sinais, centavos e saldos esperados, com confiança média de 92,90 e 93,73, respectivamente; uma imagem vazia foi rejeitada. Relatório e hashes da instalação estão em `D:\Lume\validacao-2026-10-21\ocr\native-ocr-report.json` e `installation-manifest.json`. Esses exemplos não certificam todos os layouts bancários e continuam exigindo revisão das linhas extraídas.
+
+`backend/Dockerfile` prepara essas dependências em Linux e roda o servidor sem root. Construa a partir de `backend`, fornecendo segredos somente no ambiente de execução. Esse Dockerfile ainda não foi construído nesta máquina, que não possui Docker; a imagem e o OCR na hospedagem escolhida continuam sujeitos à homologação própria. A hospedagem precisa comportar a memória dos workers, os processos nativos e o tempo de execução. XLSX roda isolado com limite de memória/prazo e tamanho descompactado; capacidade de processamento não é promessa de execução contínua em hospedagem suspensa.
 
 O worker usa fila persistente, lease, tentativas limitadas e processamento limitado por usuário e globalmente. Páginas extraídas têm checkpoints para retomada. Partes e textos intermediários são privados e removidos ao concluir ou expirar a retenção; versões anteriores dos objetos continuam rastreadas até a exclusão confirmada no Storage.
 

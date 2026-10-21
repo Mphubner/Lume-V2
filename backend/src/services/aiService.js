@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { calculateDeterministicHealth, monthlyAverage, monetaryTotal } from '../domain/financial.js';
 import { calculateFinancialPlan } from '../domain/planner.js';
@@ -11,18 +12,96 @@ const providers = {
 };
 const currency = value => value === null ? 'indisponível' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
 const MAX_BODY = 131072;
-let lastAttempt = null;
+const DEFAULT_COOLDOWN_MS = 60000;
+const environmentStates = new WeakMap();
+const keyId = key => createHash('sha256').update(key).digest('hex');
+const normalizeKey = key => typeof key === 'string' && key.trim() && !/\s/.test(key.trim()) ? key.trim() : null;
+function keyList(value) {
+  if (typeof value !== 'string' || !value.trim()) return [];
+  const text = value.trim();
+  if (/^[\[{]/.test(text)) {
+    try { const parsed = JSON.parse(text); return Array.isArray(parsed) ? parsed.map(normalizeKey).filter(Boolean) : []; }
+    catch { return []; }
+  }
+  return text.split(/[,\r\n]/).map(normalizeKey).filter(Boolean);
+}
+function providerKeys(provider, env) {
+  const keys = provider === 'groq' ? [...keyList(env.GROQ_API_KEYS), normalizeKey(env.GROQ_API_KEY), normalizeKey(env.AI_API_KEY)]
+    : provider === 'gemini' ? [normalizeKey(env.GEMINI_API_KEY)] : providers[provider] ? [normalizeKey(env.AI_API_KEY)] : [];
+  return [...new Set(keys.filter(Boolean))];
+}
+function runtimeState(env) {
+  // Reset availability when configuration changes, retaining rejection/cooldown
+  // state so adding another key cannot clear a shared rate limit.
+  const signature = keyId(JSON.stringify([env.AI_ENABLED, env.AI_PROVIDER, env.AI_FALLBACK_PROVIDER, env.AI_MODEL, env.AI_MODEL_GEMINI,
+    ...Object.keys(providers).map(provider => providerKeys(provider, env)), providerKeys('gemini', env)]));
+  let state = environmentStates.get(env);
+  if (!state) {
+    state = { signature, keys: new Map(), cooldowns: new Map(), preferred: new Map(), lastAttempt: null };
+    environmentStates.set(env, state);
+  } else if (state.signature !== signature) { state.signature = signature; state.lastAttempt = null; }
+  return state;
+}
+function poolStatus(provider, keys, state, now = Date.now()) {
+  const entries = keys.map(key => state.keys.get(provider + ':' + keyId(key)));
+  const cooldownUntil = state.cooldowns.get(provider) ?? 0;
+  const rejected = entries.filter(entry => entry?.rejected).length;
+  const coolingDown = entries.filter(entry => !entry?.rejected && entry?.retryAt > now).length;
+  return { credentialCount: keys.length, rejectedCredentialCount: rejected, coolingDownCredentialCount: coolingDown,
+    readyCredentialCount: cooldownUntil > now ? 0 : keys.length - rejected - coolingDown,
+    cooldownUntil: cooldownUntil > now ? new Date(cooldownUntil).toISOString() : null };
+}
 export function getAIReadiness(env = process.env) {
+  const state = runtimeState(env);
+  const lastAttempt = state.lastAttempt;
   const provider = env.AI_PROVIDER || 'groq';
   const names = [...new Set([provider, env.AI_FALLBACK_PROVIDER].filter(Boolean))].slice(0, 2);
   const configuration = names.map(name => ({ provider: name, supported: name === 'gemini' || Boolean(providers[name]),
-    configured: Boolean(name === 'gemini' ? env.GEMINI_API_KEY : providers[name] && env.AI_API_KEY) }));
+    configured: providerKeys(name, env).length > 0, ...poolStatus(name, providerKeys(name, env), state) }));
   const enabled = env.AI_ENABLED === 'true';
   const configured = configuration.some(item => item.supported && item.configured);
-  return { enabled, configured, configuration, available: enabled && configured && lastAttempt?.status === 'available',
-    status: !enabled ? 'disabled' : !configured ? 'not_configured' : lastAttempt?.status ?? 'configured_unverified',
+  const available = enabled && lastAttempt?.status === 'available'
+    && configuration.some(item => item.provider === lastAttempt.provider && item.readyCredentialCount > 0);
+  const noReadyCredentials = configured && !configuration.some(item => item.readyCredentialCount > 0);
+  const poolFailure = noReadyCredentials ? configuration.some(item => item.cooldownUntil || item.coolingDownCredentialCount > 0) ? 'rate_limited' : 'authentication_failed' : null;
+  return { enabled, configured, configuration, available,
+    status: !enabled ? 'disabled' : !configured ? 'not_configured' : poolFailure
+      ?? (lastAttempt?.status === 'available' && !available ? 'configured_unverified' : lastAttempt?.status ?? 'configured_unverified'),
     dependencyVerification: lastAttempt?.providerRequestAttempted ? 'last_request_only' : 'not_checked', lastAttempt,
     planner: { available: true, mode: 'deterministic_with_optional_presentation', financialWrites: false } };
+}
+function retryDelay(response, now = Date.now()) {
+  const raw = response.headers?.get?.('retry-after');
+  let delay;
+  if (raw !== null && raw !== undefined && raw.trim()) {
+    const seconds = Number(raw);
+    const parsed = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : Date.parse(raw) - now;
+    if (Number.isFinite(parsed) && parsed >= 0) delay = parsed;
+  }
+  // Groq documents these resets as durations, e.g. 2m59.56s and 7.66s.
+  for (const unit of ['requests', 'tokens']) {
+    if (response.headers?.get?.('x-ratelimit-remaining-' + unit) !== '0') continue;
+    const reset = response.headers?.get?.('x-ratelimit-reset-' + unit) ?? '';
+    const match = /^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?$/.exec(reset);
+    if (match && reset) delay = Math.max(delay ?? 0, (Number(match[1] ?? 0) * 3600 + Number(match[2] ?? 0) * 60 + Number(match[3] ?? 0)) * 1000);
+  }
+  return Number.isFinite(delay) && delay >= 0 && now + delay < 8.64e15 ? delay : DEFAULT_COOLDOWN_MS;
+}
+async function providerFailure(response) {
+  let data;
+  try { data = await readResponse(response); } catch { /* Error bodies are untrusted and never returned or logged. */ }
+  const details = data?.error;
+  const scopes = [response.headers?.get?.('x-ratelimit-scope'), details?.scope, details?.rate_limit_scope, details?.quota_scope, details?.limit_scope]
+    .filter(value => typeof value === 'string' && value.trim());
+  const classification = [details?.code, details?.type, details?.message, details?.limit_type].filter(value => typeof value === 'string').join(' ').replace(/[_-]/g, ' ');
+  const exhaustedSharedHeader = ['requests', 'tokens'].some(unit => response.headers?.get?.('x-ratelimit-remaining-' + unit) === '0');
+  // Groq limits normally belong to the organization. An unknown 429 must stop
+  // the entire pool; only an explicit key restriction can select another key.
+  const keySpecific = scopes.length > 0 && scopes.every(scope => /^(api[_ -]?key|key)$/i.test(scope.trim()))
+    && !details?.organization_id && !details?.project_id && !exhaustedSharedHeader
+    && !/\b(organization|organisation|project|tokens?|tpm|tpd|itpm|otpm|quota|spending|billing)\b/i.test(classification);
+  return { content: null, error: response.status === 401 ? 'authentication_failed' : response.status === 429 ? 'rate_limited' : 'provider_unavailable',
+    keySpecific, retryAfterMs: retryDelay(response) };
 }
 async function readResponse(response) {
   if (Number(response.headers?.get?.('content-length') || 0) > MAX_BODY) throw new Error('oversized_response');
@@ -43,11 +122,9 @@ async function readResponse(response) {
   }
   return JSON.parse(Buffer.concat(buffers).toString('utf8'));
 }
-async function requestProvider(provider, messages, options, signal) {
+async function requestProvider(provider, apiKey, messages, options, signal) {
   const env = options.env ?? process.env;
   const gemini = provider === 'gemini';
-  const apiKey = gemini ? env.GEMINI_API_KEY : env.AI_API_KEY;
-  if (!apiKey) return { content: null, error: 'not_configured' };
   const config = providers[provider];
   if (!gemini && !config) return { content: null, error: 'unsupported_provider' };
   const model = options.model ?? (gemini ? env.AI_MODEL_GEMINI || 'gemini-2.5-flash' : env.AI_MODEL || config.model);
@@ -62,7 +139,7 @@ async function requestProvider(provider, messages, options, signal) {
   const response = await (options.fetchImpl ?? fetch)(url, { method: 'POST', signal,
     headers: { 'Content-Type': 'application/json', ...(gemini ? { 'x-goog-api-key': apiKey } : { Authorization: 'Bearer ' + apiKey }) },
     body: JSON.stringify(body) });
-  if (!response.ok) return { content: null, error: response.status === 429 ? 'rate_limited' : 'provider_unavailable' };
+  if (!response.ok) return { ...await providerFailure(response), httpStatus: response.status };
   const data = await readResponse(response);
   const text = gemini ? data.candidates?.[0]?.content?.parts?.[0]?.text : data.choices?.[0]?.message?.content;
   const finishReason = gemini ? data.candidates?.[0]?.finishReason : data.choices?.[0]?.finish_reason;
@@ -74,9 +151,11 @@ async function callAIRequest(messages, options = {}) {
   if (!Array.isArray(messages) || JSON.stringify(messages).length > 40000) return { content: null, error: 'context_too_large' };
   const env = options.env ?? process.env;
   if (env.AI_ENABLED !== 'true') return { content: null, error: 'disabled' };
+  const state = runtimeState(env);
   const names = [...new Set([options.provider ?? env.AI_PROVIDER ?? 'groq', env.AI_FALLBACK_PROVIDER].filter(Boolean))].slice(0, 2);
   const controller = new AbortController();
-  const timeoutMs = Math.min(30000, Math.max(1, Number(options.timeoutMs ?? 15000)));
+  const requestedTimeout = Number(options.timeoutMs ?? 15000);
+  const timeoutMs = Number.isFinite(requestedTimeout) ? Math.min(30000, Math.max(1, requestedTimeout)) : 15000;
   let providerRequestAttempted = false;
   let timeout;
   try {
@@ -85,10 +164,36 @@ async function callAIRequest(messages, options = {}) {
         let result;
         for (const name of names) {
           if (controller.signal.aborted) return { content: null, error: 'timeout', providerRequestAttempted };
-          providerRequestAttempted ||= Boolean(name === 'gemini' ? env.GEMINI_API_KEY : providers[name] && env.AI_API_KEY);
-          try { result = await requestProvider(name, messages, options, controller.signal); }
-          catch { result = { content: null, error: controller.signal.aborted ? 'timeout' : 'provider_unavailable' }; }
-          if (result.content) return { ...result, providerRequestAttempted };
+          const keys = providerKeys(name, env);
+          if (!keys.length) { result ??= { content: null, error: name === 'gemini' || providers[name] ? 'not_configured' : 'unsupported_provider' }; continue; }
+          if ((state.cooldowns.get(name) ?? 0) > Date.now()) { result = { content: null, error: 'rate_limited', provider: name }; continue; }
+          const preferred = state.preferred.get(name);
+          const orderedKeys = [...keys].sort((a, b) => Number(keyId(b) === preferred) - Number(keyId(a) === preferred));
+          result = { content: null, error: 'authentication_failed', provider: name };
+          for (const apiKey of orderedKeys) {
+            const id = name + ':' + keyId(apiKey);
+            const keyState = state.keys.get(id);
+            if (keyState?.rejected) continue;
+            if (keyState?.retryAt > Date.now()) { result = { content: null, error: 'rate_limited', provider: name }; continue; }
+            if (controller.signal.aborted) return { content: null, error: 'timeout', providerRequestAttempted };
+            providerRequestAttempted = true;
+            let attempt;
+            try { attempt = await requestProvider(name, apiKey, messages, options, controller.signal); }
+            catch { attempt = { content: null, error: controller.signal.aborted ? 'timeout' : 'provider_unavailable' }; }
+            if (controller.signal.aborted) return { content: null, error: 'timeout', providerRequestAttempted };
+            const { httpStatus, keySpecific, retryAfterMs, ...safeResult } = attempt;
+            result = { ...safeResult, provider: name };
+            if (result.content) { state.preferred.set(name, keyId(apiKey)); return { ...result, providerRequestAttempted }; }
+            if (httpStatus === 401) { state.keys.set(id, { rejected: true }); continue; }
+            if (httpStatus === 429) {
+              const retryAt = Date.now() + retryAfterMs;
+              if (keySpecific) { state.keys.set(id, { retryAt }); continue; }
+              state.cooldowns.set(name, retryAt);
+            }
+            // Network failures, shared quotas and request/model errors cannot be
+            // repaired by sending the same request through every credential.
+            break;
+          }
         }
         return { ...(result ?? { content: null, error: 'not_configured' }), providerRequestAttempted };
       })(),
@@ -100,8 +205,8 @@ async function callAIRequest(messages, options = {}) {
 }
 export async function callAI(messages, options = {}) {
   const result = await callAIRequest(messages, options);
-  // Injected test/config environments must not affect the live service status.
-  if (!options.env) lastAttempt = { at: new Date().toISOString(), status: result.content ? 'available' : result.error ?? 'unavailable',
+  // Injected environments have isolated state and cannot affect live readiness.
+  runtimeState(options.env ?? process.env).lastAttempt = { at: new Date().toISOString(), status: result.content ? 'available' : result.error ?? 'unavailable',
     providerRequestAttempted: Boolean(result.providerRequestAttempted),
     ...(result.provider ? { provider: result.provider } : {}) };
   return result;

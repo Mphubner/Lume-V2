@@ -35,6 +35,10 @@ jobs:
         working-directory: backend
       - run: npm run test:sql -- --legacy-schema
         working-directory: backend
+      - run: npm run test:sql -- --extensions-schema
+        working-directory: backend
+      - run: npm run test:sql -- --legacy-schema --extensions-schema
+        working-directory: backend
       - run: npm audit --audit-level=high
         working-directory: backend
       - run: npm ci

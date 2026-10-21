@@ -2,24 +2,24 @@
 
 Verificação remota em 20/10/2026: Email habilitado, confirmação obrigatória, novos cadastros permitidos e acesso anônimo desabilitado. Google está habilitado no Supabase, mas fica oculto na nova versão do aplicativo até uma homologação completa. Site URL é `https://lumefin.com.br` e o retorno permitido `https://lumefin.com.br/**` já cobre o callback novo. Nenhuma dessas configurações foi alterada durante a inspeção.
 
-O projeto usa o serviço de email embutido. Ele restringe destinatários à equipe e impõe limite de envio; por isso a confirmação para familiares/amigos precisa de SMTP próprio. Marcos confirmou que ainda não tem esse serviço. [Restrições oficiais do Supabase](https://supabase.com/docs/guides/auth/auth-smtp).
+Na inspeção de 20/10/2026, o projeto usava o serviço de email embutido, que restringe destinatários à equipe e impõe limite de envio. Em 21/10/2026, Marcos escolheu usar SMTP do Gmail no piloto. Os campos públicos foram preparados no painel Supabase; a senha de app e o salvamento ficam com o responsável. Essa preparação não comprova configuração salva nem entrega de mensagens. [Restrições oficiais do Supabase](https://supabase.com/docs/guides/auth/auth-smtp).
 
-## Opção para o piloto
+## Gmail escolhido para o piloto
 
-Resend oferece atualmente uma franquia gratuita de 3.000 emails/mês, limitada a 100/dia. Não foi criada conta nem contratado plano nesta implementação. Confira a franquia no momento de ativar. [Preço oficial](https://resend.com/pricing).
-
-1. Crie uma conta no serviço e verifique um domínio de envio que você controla, por exemplo `conta.lumefin.com.br`. O painel fornecerá os registros DNS reais; não invente valores SPF/DKIM nem substitua os registros de recebimento do domínio.
-2. Após a verificação, crie uma chave apenas para envio e restrita ao domínio, quando disponível. Ela deve ser inserida diretamente no painel Supabase, nunca no frontend ou no Git.
-3. Em Authentication → Emails → SMTP Settings, configure os valores abaixo e um remetente do domínio verificado. Sugestão de endereço, ainda não provisionado: `acesso@conta.lumefin.com.br`, nome `Lume Fin`.
+1. Na conta Google do remetente, ative a verificação em duas etapas e crie uma senha de app para o Lume. A senha normal do Gmail não serve para essa configuração. O Google pode restringir senhas de app conforme a política da conta.
+2. Em Authentication → Emails → SMTP Settings do projeto Lume, habilite o SMTP personalizado e confira os campos abaixo. O remetente e o usuário precisam corresponder à conta Gmail autenticada.
+3. Insira a senha de app diretamente no campo Password do painel e salve. Não coloque essa senha no Git, em variáveis `VITE_` ou no chat. Um `SMTP_PASSWORD` em `backend/.env` não configura o Supabase Auth.
 
 | Campo | Valor |
 | --- | --- |
-| Host | `smtp.resend.com` |
+| Remetente | `marcosphubner@gmail.com` |
+| Nome | `Lume Fin` |
+| Host | `smtp.gmail.com` |
 | Porta | `465` |
-| Usuário | `resend` |
-| Senha | Chave privada do serviço, preenchida pelo responsável |
+| Usuário | `marcosphubner@gmail.com` |
+| Senha | Senha de app do Google, preenchida pelo responsável |
 
-O provedor documenta essa integração e exige domínio verificado e chave válida. [Integração oficial](https://resend.com/docs/send-with-supabase-smtp), [verificação do domínio](https://resend.com/docs/dashboard/domains/introduction).
+O Supabase documenta `smtp.gmail.com` nas portas 465 e 587; o formulário preparado usa 465. Esta escolha usa o endereço Gmail como remetente e não provisiona um endereço `@lumefin.com.br`. Confira os limites e a entrega do Gmail durante o piloto, antes de convidar outras pessoas. [Integração oficial Supabase/Google](https://supabase.com/docs/guides/troubleshooting/using-google-smtp-with-supabase-custom-smtp-ZZzU4Y), [senhas de app do Google](https://support.google.com/mail/answer/185833?hl=pt-BR).
 
 ## Retorno e confirmação
 
@@ -27,10 +27,10 @@ Mantenha Confirm email ligado. Publique frontend com `VITE_GOOGLE_AUTH_ENABLED=f
 
 O padrão atual `https://lumefin.com.br/**` permite o callback com `?next=`. Se substituir por regras mais específicas depois, inclua `/auth/callback**` e os retornos antigos `/login`, `/resetar-senha` e `/convite` enquanto houver links em circulação. Não permita origens de terceiros. [Redirect URLs](https://supabase.com/docs/guides/auth/redirect-urls).
 
-Confira os modelos de confirmação/recuperação para manter o link `{{ .ConfirmationURL }}` fornecido pelo Supabase; evite rastreamento que reescreva links de autenticação. O remetente precisa corresponder ao domínio verificado.
+Confira os modelos de confirmação/recuperação para manter o link `{{ .ConfirmationURL }}` fornecido pelo Supabase; evite rastreamento que reescreva links de autenticação. Para uso local, inclua explicitamente `http://localhost:5173/auth/callback**` e `http://127.0.0.1:5173/auth/callback**` na lista permitida do projeto; cada origem usada no navegador precisa de seu próprio retorno.
 
 ## Aceite antes de liberar convidados
 
 Use duas contas fictícias controladas pelo responsável, em homologação: cadastro, recebimento na caixa de entrada, confirmação, login, reenvio com intervalo, link expirado, recuperação em outro navegador e login de uma conta que antes usava Google. Para essa última, a recuperação permite definir senha sem depender de OAuth. Teste também que o convite chega ao espaço correto após confirmar o email.
 
-Esse roteiro envolve recebimento e acesso humanos reais. Testes locais com respostas simuladas não comprovam entrega, DNS, reputação ou limites do serviço. A habilitação remota permanece pendente até conta, domínio e credencial estarem disponíveis.
+Esse roteiro envolve recebimento e acesso humanos reais. Testes locais com respostas simuladas não comprovam entrega, reputação ou limites do serviço. A habilitação e o aceite remoto permanecem pendentes até o responsável salvar a senha de app e confirmar o recebimento de um link válido.

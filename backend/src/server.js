@@ -55,7 +55,7 @@ export function createApp({db=supabase,workerState=()=>({enabled:false,healthy:t
   try{
    if(!db)throw new Error('unconfigured');
    const state=checked(await db.rpc('application_readiness')),worker=workerState();
-   if(state?.schema_version!=='202610200008'||!worker.healthy)throw new Error('not_ready');
+   if(state?.schema_version!=='202610210009'||!worker.healthy)throw new Error('not_ready');
    const ai=getAIReadiness();
    res.json({status:'ready',schema_version:state.schema_version,import_worker:worker.enabled,planner:ai.planner,ai:{status:ai.status,dependencyVerification:ai.dependencyVerification}});
   }catch{res.status(503).json({status:'not_ready',error:'Banco, migrações ou processamento indisponível.'});}
@@ -99,7 +99,7 @@ export function startServer() {
  const enabled=Boolean(supabase)&&process.env.IMPORT_WORKER_ENABLED!=='false';
  const worker=enabled?startImportWorker(supabase,{onSuccess:()=>{workerErrors=0;},onError:error=>{workerErrors++;console.error(JSON.stringify({event:'import_worker_error',code:error.code||'internal'}));}}):null;
  const app=createApp({workerState:()=>({enabled,healthy:workerErrors<3})});
- const server=app.listen(Number(process.env.PORT||5001),()=>console.log(JSON.stringify({event:'server_started',port:Number(process.env.PORT||5001),import_worker:enabled})));
+ const server=app.listen(Number(process.env.PORT||5001),process.env.LISTEN_HOST||undefined,()=>console.log(JSON.stringify({event:'server_started',port:Number(process.env.PORT||5001),import_worker:enabled})));
  let closing=false;
  const close=async()=>{if(closing)return;closing=true;server.close();await worker?.stop();server.closeAllConnections();};
  process.once('SIGINT',close);process.once('SIGTERM',close);
