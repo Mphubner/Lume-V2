@@ -13,13 +13,15 @@ Na inspeção de 20/10/2026, o projeto usava o serviço de email embutido, que r
 | Host | `smtp-relay.brevo.com` |
 | Porta | `587` |
 | Usuário e senha | Credenciais SMTP Brevo inseridas pelo responsável no painel |
-| Remetente | Deve corresponder a um remetente verificado no Brevo |
+| Remetente | `contato@lumefin.com.br`, verificado no Brevo e salvo no Supabase |
 
 Não coloque a senha SMTP no Git, em variáveis `VITE_` ou no chat. Um `SMTP_PASSWORD` em `backend/.env` não configura o Supabase Auth. O remetente de email é separado do usuário técnico utilizado para autenticar no SMTP Brevo.
 
 O primeiro teste com Brevo foi aceito pelo Supabase (HTTP 200), mas o histórico transacional confirmou erro: o Gmail configurado como remetente não era válido no Brevo. O destinatário confirmou que não recebeu a mensagem. Portanto, HTTP 200 não comprova entrega. A conclusão exige corrigir/verificar o remetente, repetir o envio, conferir o status no provedor e confirmar o recebimento.
 
-O endereço desejado foi informado como `contato@lumefin.com`, enquanto o aplicativo usa `lumefin.com.br`. A confirmação do domínio exato e sua validação no Brevo estão pendentes. Não deduza que esses dois domínios pertençam ao mesmo responsável e não salve um remetente não verificado como se a configuração estivesse concluída.
+Em 21/10/2026, o responsável confirmou `contato@lumefin.com.br`. O Brevo mostrou esse remetente verificado e o domínio `lumefin.com.br` autenticado, com Branded mail, DKIM e DMARC configurados. O remetente correto foi salvo no Supabase e conferido novamente após recarregar o painel.
+
+O novo teste de recuperação foi aceito pelo Supabase às 15:34:10 UTC de 21/10/2026 (HTTP 200). O Brevo registrou `Delivered` às 12:34 no horário local, usando o remetente correto; a evidência local está em `D:\Lume\validacao-2026-10-21\brevo-delivered-final.png`. O recebimento na caixa e a abertura do link ainda aguardam confirmação humana. O envio desse teste não alterou a senha.
 
 ## Retorno e confirmação
 
@@ -33,4 +35,4 @@ Confira os modelos de confirmação/recuperação para manter o link `{{ .Confir
 
 Use duas contas fictícias controladas pelo responsável, em homologação: cadastro, recebimento na caixa de entrada, confirmação, login, reenvio com intervalo, link expirado, recuperação em outro navegador e login de uma conta que antes usava Google. Para essa última, a recuperação permite definir senha sem depender de OAuth. Teste também que o convite chega ao espaço correto após confirmar o email.
 
-Esse roteiro envolve recebimento e acesso humanos reais. Testes locais com respostas simuladas não comprovam entrega, reputação ou limites do serviço. O SMTP Brevo já está salvo; o aceite de entrega permanece pendente até corrigir o remetente e confirmar o recebimento de um link válido. As duas identidades sintéticas usadas nos testes de API foram confirmadas administrativamente apenas para QA: esses testes não validam entrega de email.
+Esse roteiro envolve recebimento e acesso humanos reais. Testes locais com respostas simuladas não comprovam entrega, reputação ou limites do serviço. O SMTP Brevo e o remetente correto estão salvos, e o provedor registrou a entrega do teste real. O aceite completo permanece pendente até o responsável confirmar o recebimento e a abertura de um link válido. As duas identidades sintéticas usadas nos testes de API foram confirmadas administrativamente apenas para QA: esses testes não validam entrega de email.
