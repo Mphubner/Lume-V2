@@ -14,6 +14,8 @@ O responsável substituiu Gmail por Brevo no Supabase. O primeiro teste teve a e
 
 O frontend e a API também foram iniciados localmente, consumindo esse Supabase real. `/health` e `/ready` responderam 200, com schema `202610210009` e worker habilitado. Os testes financeiros acima usaram autenticação real pela API; o recebimento do email foi confirmado separadamente pelo responsável, e a abertura dos links permanece como aceite humano pendente. Em `D:\Lume`, os atalhos `Iniciar Lume.cmd`, `Verificar Lume.cmd` e `Parar Lume.cmd` acionam os scripts do clone `Lume-V2`.
 
+A correção de importação de 21/10/2026 reconhece o CSV de conta corrente do Inter com metadados antes do cabeçalho e o PDF Inter com colunas de valor e saldo, datas por dia e continuação entre páginas. Os saldos por lançamento são conferidos em centavos e permanecem separados das transações; valores inferidos não são apresentados como saldos declarados. Documentos incompletos ou conteúdo desconhecido em preâmbulos e rodapés bloqueiam o lote inteiro. A suíte backend passou em 117 testes, e a comparação local com os arquivos fornecidos conferiu contagens, valores, saldos e referências de duplicidade entre formatos. Os testes versionados são sintéticos; os documentos reais e as evidências privadas ficam fora do Git. Essa correção não aprova nem reaplica lançamentos existentes.
+
 ## Sequência de implantação
 
 1. Confira o projeto de destino, confirmação de email e URLs de retorno para `/auth/callback**`, `/login`, `/dashboard`, `/resetar-senha` e `/convite`. O piloto atual usa o projeto existente com dados de teste, conforme autorização do responsável. Configure SMTP próprio conforme [acesso por email](AUTH_EMAIL_SETUP.md). Separe homologação antes de introduzir finanças reais.

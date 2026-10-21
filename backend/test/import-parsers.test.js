@@ -49,6 +49,97 @@ test('CSV maps separate debit and credit and rejects ambiguity, truncation, zero
   ]) assert.throws(() => parseCSV(content), ImportError);
 });
 
+// Synthetic bank layout: no real customer names, account references or statement rows.
+const interCSV = (rows = '03/04/2026;Pix recebido;Cliente Exemplo;50,00;120,00\n01/04/2026;Compra no débito;Loja Exemplo;-30,00;70,00') =>
+  ` Extrato Conta Corrente \nConta ;999000111\nPeríodo ;01/04/2026 a 05/04/2026\nSaldo ;120,00\n\nData Lançamento;Histórico;Descrição;Valor;Saldo\n${rows}`;
+
+test('Inter CSV recognizes its complete preamble, composes Pix descriptions and separates running balances', () => {
+  const buffer = Buffer.from(interCSV().replaceAll('\n', '\r\n'));
+  const result = parseStatementBuffer(buffer, 'csv');
+  assert.equal(result.metadata.parser_version, 'lume-statements-2');
+  assert.equal(result.metadata.format_variant, 'inter_current_account');
+  assert.equal(result.metadata.header_line, 6);
+  assert.equal(result.metadata.delimiter, ';');
+  assert.equal(result.metadata.account_reference, '999000111');
+  assert.equal(result.metadata.period_start, '2026-04-01');
+  assert.equal(result.metadata.period_end, '2026-04-05');
+  assert.equal(result.metadata.closing_balance, '120.00');
+  assert.equal(result.metadata.balance_requires_confirmation, true);
+  assert.equal(result.metadata.opening_balance, undefined);
+  assert.equal(result.metadata.closing_balance_date, undefined);
+  assert.deepEqual(result.metadata.balance_reconciliation, {
+    status: 'matched', order: 'descending', rows_with_balances: 2, checked_intervals: 1,
+    opening_balance_inferred: '100.00', closing_balance_observed: '120.00', sum_cents: '2000',
+  });
+  assert.equal(result.transactions.length, 2);
+  assert.deepEqual(result.transactions.map(row => row.amount_cents), ['5000', '-3000']);
+  assert.deepEqual(result.transactions.map(row => row.source.line), [7, 8]);
+  assert.equal(result.transactions[0].description, 'Pix recebido - Cliente Exemplo');
+  assert.equal(result.transactions[0].payment_method, 'pix');
+  assert.equal(result.transactions[0].economic_kind, 'standard');
+  assert.equal(result.transactions[0].source.raw_balance, '120,00');
+  assert.equal(result.transactions[0].source.balance_cents, '12000');
+  assert.equal(result.transactions[0].source.raw_amount, '50,00');
+  assert.deepEqual(result.metadata.preamble.map(row => row.line), [1, 2, 3, 4]);
+  assert.deepEqual(parseStatementBuffer(buffer, 'csv'), result);
+});
+
+test('Inter CSV supports header-only exports, ascending order, same-day reversal and signed refunds', () => {
+  const result = parseCSV('Data Lançamento;Histórico;Descrição;Valor;Saldo\n01/04/2026;Pix recebido;Estorno Exemplo;-30,00;70,00\n01/04/2026;Pix recebido;Cliente Exemplo;50,00;120,00');
+  assert.equal(result.transactions[0].amount_cents, '-3000');
+  assert.equal(result.transactions[0].type, 'expense');
+  assert.equal(result.metadata.balance_reconciliation.order, 'ascending');
+  assert.equal(result.metadata.balance_reconciliation.opening_balance_inferred, '100.00');
+  assert.equal(result.metadata.balance_requires_confirmation, true);
+  assert.equal(result.metadata.opening_balance, undefined);
+  assert.equal(parseCSV(interCSV(), { delimiter: ';', columns: { description: 'Descrição' } }).transactions[0].description, 'Cliente Exemplo');
+});
+
+test('CSV detects a reordered Inter header without treating balances as amounts', () => {
+  const result = parseCSV('Saldo;Descrição;Valor;Histórico;Data Lançamento\n120,00;Cliente Exemplo;50,00;Pix recebido;03/04/2026');
+  assert.equal(result.transactions[0].amount_cents, '5000');
+  assert.equal(result.transactions[0].source.balance_cents, '12000');
+  assert.equal(result.transactions[0].description, 'Pix recebido - Cliente Exemplo');
+  assert.equal(result.metadata.balance_reconciliation.order, 'single');
+});
+
+test('CSV rejects unknown or incomplete preambles instead of skipping them', () => {
+  for (const content of [
+    'Informação desconhecida\nData;Descrição;Valor\n01/04/2026;Compra;-30,00',
+    interCSV().replace('Conta ;999000111\n', ''),
+    interCSV().replace('Conta ;999000111', 'Outro metadado ;999000111'),
+    interCSV().replace('Período ;01/04/2026 a 05/04/2026', 'Conta ;111000999'),
+    interCSV().replace('Saldo ;120,00', 'Saldo ;'),
+    interCSV().replace('01/04/2026 a 05/04/2026', '05/04/2026 a 01/04/2026'),
+  ]) assert.throws(() => parseCSV(content), ImportError);
+});
+
+test('CSV rejects duplicated headers, conflicting aliases and invalid explicit column mappings', () => {
+  for (const header of ['Data;Descrição;Valor;VALOR', 'Data;Descrição;Valor;Amount', 'Data;Descrição;Valor;', 'Data;Descrição;Valor;lume_source_identity;LUME_SOURCE_IDENTITY']) {
+    assert.throws(() => parseCSV(`${header}\n01/04/2026;Compra;-30,00;extra;extra`), error => error.code === 'CSV_COLUMNS');
+  }
+  const csv = 'Data;Descrição;Valor\n01/04/2026;Compra;-30,00';
+  for (const columns of [{ amount: -1 }, { amount: 3 }, { amount: 1.5 }, { amount: false }, { amount: 'Inexistente' }, { amount: 1 }, { description: '' }, { unknown: 0 }]) {
+    assert.throws(() => parseCSV(csv, { columns }), error => error.code === 'CSV_COLUMNS');
+  }
+  assert.throws(() => parseCSV('Data;Descrição;Valor;Débito;Crédito\n01/04/2026;Compra;-30,00;30,00;'), error => error.code === 'CSV_COLUMNS');
+  assert.throws(() => parseCSV('Data;Histórico;Descrição;Valor\n01/04/2026;Pix enviado;Fornecedor Exemplo;-30,00'), error => error.code === 'CSV_COLUMNS');
+});
+
+test('CSV never silently skips incomplete rows, repeated headers or footer content', () => {
+  const base = 'Data;Descrição;Valor\n01/04/2026;Compra;-30,00\n';
+  for (const [row, code] of [[';Compra;-10,00', 'INVALID_DATE'], ['02/04/2026;Compra;', 'INVALID_AMOUNT'], [';;', 'INVALID_AMOUNT'], ['Data;Descrição;Valor', 'CSV_REPEATED_HEADER'], ['Total;conferir;30,00', 'INVALID_DATE']]) {
+    assert.throws(() => parseCSV(base + row), error => error.code === code && error.details.line === 3);
+  }
+});
+
+test('Inter CSV fails the whole extraction for missing balances, out-of-period rows and mismatched balance chains', () => {
+  assert.throws(() => parseCSV(interCSV().replace('50,00;120,00', '50,00;121,00')), error => error.code === 'CSV_BALANCE_MISMATCH');
+  assert.throws(() => parseCSV(interCSV().replace('50,00;120,00', '50,00;')), error => error.code === 'CSV_BALANCE_MISSING' && error.details.line === 7);
+  assert.throws(() => parseCSV(interCSV().replace('03/04/2026;Pix', '06/04/2026;Pix')), error => error.code === 'CSV_PERIOD_MISMATCH' && error.details.line === 7);
+  assert.throws(() => parseCSV(interCSV().replace('50,00;120,00', ';120,00')), error => error.code === 'INVALID_AMOUNT' && error.details.line === 7);
+});
+
 function ofx(transactions, currency = 'BRL') {
   return `OFXHEADER:100\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>${currency}\n<BANKACCTFROM><BANKID>077\n<ACCTID>123456\n<ACCTTYPE>CHECKING\n</BANKACCTFROM><BANKTRANLIST><DTSTART>20260101000000[-3:BRT]\n<DTEND>20260131000000[-3:BRT]\n${transactions}</BANKTRANLIST><LEDGERBAL><BALAMT>100.00\n<DTASOF>20260131000000[-3:BRT]\n</LEDGERBAL></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>`;
 }
