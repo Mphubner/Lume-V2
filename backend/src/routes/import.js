@@ -3,13 +3,14 @@ import { randomUUID } from 'node:crypto';
 import multer from 'multer';
 import { authMiddleware } from '../middleware/auth.js';
 import { supabase } from '../config/supabase.js';
-import { HTTPError, assertUUID, checked, requireRecordAccess, resolveScope, scopeQuery, handleError } from '../services/access.js';
+import { HTTPError, assertUUID, checked, requireRecordAccess, resolveScope, scopeQuery, handleError, assertCategoryAccess } from '../services/access.js';
 import { sha256, ImportError, parseAmountCents, centsToDecimal, parseStatementDate, MAX_IMPORT_ROWS } from '../domain/importParsers.js';
 import { MAX_IMPORT_BYTES } from '../domain/importLimits.js';
 import { getImportCapabilities } from '../services/importPipeline.js';
 import { convertStatement } from '../domain/statementConversion.js';
 import { IMPORT_BUCKET } from '../services/importWorker.js';
 import { enrichFinancialRows } from '../services/relations.js';
+import { withImportCategorySuggestions, applyImportCategorySuggestions } from '../services/importCategorization.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -126,7 +127,16 @@ router.get('/pending', async (req, res) => {
       .eq('imports.status', 'needs_review').order('import_id').order('row_number').range(offset, offset + limit - 1);
     if (req.query.import_id) query = query.eq('import_id', assertUUID(req.query.import_id));
     const result = await query; checked(result);
-    return res.json({ transactions: await enrichFinancialRows(supabase,result.data||[],scope,{accounts:true}), total: result.count || 0, count: result.count || 0, limit, offset });
+    const proposed = await withImportCategorySuggestions(supabase, result.data || [], scope);
+    return res.json({ transactions: await enrichFinancialRows(supabase,proposed,scope,{accounts:true}), total: result.count || 0, count: result.count || 0, limit, offset });
+  } catch (error) { return fail(res, error); }
+});
+
+router.post('/:id/categorize', async (req, res) => {
+  try {
+    if (!req.body || Object.keys(req.body).some(key => key !== 'ids')) throw new HTTPError(400, 'Informe somente as linhas para categorizar.');
+    const job = await requireRecordAccess(supabase, 'imports', req.params.id, req.user.id, 'write');
+    return res.json(await applyImportCategorySuggestions(supabase, { actor: req.user.id, job, ids: req.body.ids }));
   } catch (error) { return fail(res, error); }
 });
 
@@ -173,6 +183,24 @@ router.patch('/rows/:id', async (req, res) => {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HTTPError(400, 'Revisão inválida.');
     for (const field of ['category_id', 'duplicate_of', 'reversal_of', 'linked_transaction_id']) if (patch[field] !== undefined && patch[field] !== null) assertUUID(patch[field]);
     for (const field of ['distinct_confirmed', 'learn_rule']) if (patch[field] !== undefined && typeof patch[field] !== 'boolean') throw new HTTPError(400, 'Confirmação deve ser booleana.');
+    const touchesCategory = ['category_id', 'subcategory', 'learn_rule'].some(field => field in patch);
+    if (touchesCategory || ['economic_kind','linked_transaction_id','reversal_of'].some(field => field in patch)) {
+      const row = await requireRecordAccess(supabase, 'import_rows', req.params.id, req.user.id, 'write');
+      const effective = { ...row, ...patch };
+      const learnable = effective.economic_kind === 'standard' && !effective.linked_transaction_id && !effective.reversal_of;
+      if (!learnable) {
+        if (patch.learn_rule === true) throw new HTTPError(400, 'O aprendizado de categorias exige uma receita ou despesa padrão, sem vínculos de transferência ou estorno.');
+        patch.learn_rule = false;
+      }
+      if (touchesCategory) {
+        const categoryId = 'category_id' in patch ? patch.category_id : row.category_id;
+        const category = await assertCategoryAccess(supabase, categoryId, req.user.id, row.workspace_id);
+        if (category && !['both', BigInt(row.amount_cents) < 0n ? 'expense' : 'income'].includes(category.type)) throw new HTTPError(400, 'A categoria não corresponde ao sinal do movimento.');
+        const subcategory = 'subcategory' in patch ? patch.subcategory : row.subcategory;
+        if (subcategory && (!category || !category.subcategories?.includes(subcategory))) throw new HTTPError(400, 'Escolha uma subcategoria válida da categoria selecionada.');
+        if (patch.learn_rule && !category) throw new HTTPError(400, 'Escolha uma categoria antes de lembrar a classificação.');
+      }
+    }
     return res.json(checked(await supabase.rpc('update_import_row', { p_actor: req.user.id, p_row: req.params.id, p_patch: patch })));
   } catch (error) { return fail(res, error); }
 });
